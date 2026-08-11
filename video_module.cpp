@@ -4,6 +4,7 @@
  * Engine exists.
  */
 
+#include "video/video_audio.h"
 #include "video/video_component.h"
 #include "video/video_decode.h"
 #include "video/video_pass.h"
@@ -11,10 +12,13 @@
 
 #include "core/app/engine.h"
 #include "core/app/module.h"
+#include "core/audio/mixer.h"
+#include "core/audio/stream.h"
 #include "core/scene/sampler.h"
 #include "core/scene/scene_json.h"
 
 #include "core/foundation/containers/blob.h"
+#include "core/foundation/core/foundation.h"
 #include "core/foundation/diagnostics/log.h"
 
 #include <span>
@@ -51,10 +55,16 @@ struct VideoChannel {
 };
 
 /// A clip's decode and playback state. Simulation-thread only: created and
-/// advanced by the present system, never touched by the renderer.
+/// advanced by the present system, never touched by the renderer. Held behind a
+/// pointer (see m_decoders) so its address is stable: the mixer keeps a pointer
+/// to `audio`, which must not move while a voice is playing it.
 struct Decoder {
   nxe::scene::Entity owner{};
   PacedPlayback playback;
+  nxe::audio::AudioStream audio;
+  nxe::audio::VoiceHandle voice;
+  u64 last_dsp = 0;
+  bool audio_started = false;
   bool touched = false;
 };
 
@@ -121,10 +131,20 @@ public:
   }
 
   void on_detach(nxe::ModuleContext &ctx) override {
+    // Stop the voices, but do not free the streams here: on_detach runs before
+    // the engine stops the audio device (Engine::shutdown), so the audio thread
+    // may still be mid-block. The decoders outlive this call and are freed when
+    // the module is - by which point the device, and its thread, are gone.
+    if (ctx.mixer().valid()) {
+      for (nx::unique_ptr<Decoder> &d : m_decoders)
+        if (d->audio_started)
+          ctx.mixer().stop(d->voice);
+      for (nx::unique_ptr<Decoder> &d : m_dying)
+        ctx.mixer().stop(d->voice);
+    }
     for (Planes &p : m_planes)
       destroy_planes(ctx.device(), p);
     m_planes.clear();
-    m_decoders.clear();
     m_renderer.shutdown(ctx.device());
   }
 
@@ -136,8 +156,8 @@ private:
     VideoChannel &channel = packet->channel<VideoChannel>();
     channel.clear();
 
-    for (Decoder &d : m_decoders)
-      d.touched = false;
+    for (nx::unique_ptr<Decoder> &d : m_decoders)
+      d->touched = false;
 
     ctx.scene().registry().view<VideoPlayer>().each(
         [&](const nxe::scene::Entity entity, VideoPlayer &player) {
@@ -155,9 +175,11 @@ private:
                                                          SYNTH_HEIGHT,
                                                          SYNTH_FPS);
             decoder.playback.reset(std::move(source), player.looping);
+            start_audio(ctx, decoder, player);
           }
 
-          const VideoFrame *const frame = decoder.playback.advance(dt);
+          const f64 step = advance_clock(ctx, decoder, dt);
+          const VideoFrame *const frame = decoder.playback.advance(step);
           if (frame == nullptr)
             return;
 
@@ -170,7 +192,24 @@ private:
           channel.items.push_back(std::move(item));
         });
 
-    reap(m_decoders);
+    reap_decoders(ctx);
+    sweep_dying(ctx);
+  }
+
+  // The clock the picture is paced against. With sound it is the mixer's DSP
+  // clock, so the video chases the audio and a hitch in one drags the other;
+  // without, it is the frame delta. Pumping the ring is done here too - once per
+  // frame keeps the decoder ahead of the device.
+  [[nodiscard]] f64 advance_clock(nxe::ModuleContext &ctx, Decoder &decoder,
+                                  const f64 dt) {
+    if (!decoder.audio_started || !ctx.mixer().valid())
+      return dt;
+    decoder.audio.pump();
+    const u32 rate = ctx.mixer().config().sample_rate;
+    const u64 now = ctx.mixer().dsp_frame();
+    const u64 prev = decoder.last_dsp;
+    decoder.last_dsp = now;
+    return rate != 0 ? nx::cast<f64>(now - prev) / rate : dt;
   }
 
   void record(nxe::ModuleContext &ctx, nxe::rg::RenderGraph &graph,
@@ -218,15 +257,15 @@ private:
   }
 
   [[nodiscard]] Decoder &decoder_for(const nxe::scene::Entity entity) {
-    for (Decoder &d : m_decoders)
-      if (d.owner == entity) {
-        d.touched = true;
-        return d;
+    for (nx::unique_ptr<Decoder> &d : m_decoders)
+      if (d->owner == entity) {
+        d->touched = true;
+        return *d;
       }
-    m_decoders.push_back(Decoder{});
-    m_decoders.back().owner = entity;
-    m_decoders.back().touched = true;
-    return m_decoders.back();
+    m_decoders.push_back(nx::make_unique<Decoder>());
+    m_decoders.back()->owner = entity;
+    m_decoders.back()->touched = true;
+    return *m_decoders.back();
   }
 
   [[nodiscard]] Planes &planes_for(nxe::rhi::Device &device,
@@ -248,12 +287,48 @@ private:
     return *found;
   }
 
-  static void reap(nx::vector<Decoder> &decoders) {
-    for (usize i = decoders.size(); i-- > 0;)
-      if (!decoders[i].touched) {
-        if (i != decoders.size() - 1)
-          decoders[i] = std::move(decoders.back());
-        decoders.pop_back();
+  // A clip with audio: open the Opus track and hand it to the mixer. The video
+  // then chases the audio clock (see present). Silent clips, and any project
+  // with audio off, skip this and stay on the frame delta.
+  void start_audio(nxe::ModuleContext &ctx, Decoder &decoder,
+                   const VideoPlayer &player) {
+    if (player.clip.empty() || !ctx.config().audio || !ctx.mixer().valid())
+      return;
+    nxe::audio::DecoderPtr codec = open_webm_opus(player.clip);
+    if (!codec)
+      return;
+    if (!decoder.audio.open(std::move(codec), 1.f, player.looping))
+      return;
+    decoder.audio.pump(); // prime the ring before the voice starts
+    decoder.voice = ctx.mixer().play(decoder.audio, {});
+    decoder.audio_started = true;
+    decoder.last_dsp = ctx.mixer().dsp_frame();
+  }
+
+  // Dead entities with a playing voice cannot be freed yet: the audio thread may
+  // still touch the stream. Stop the voice and set it aside; sweep_dying frees
+  // it once the mixer confirms it has ended.
+  void reap_decoders(nxe::ModuleContext &ctx) {
+    for (usize i = m_decoders.size(); i-- > 0;) {
+      if (m_decoders[i]->touched)
+        continue;
+      if (m_decoders[i]->audio_started && ctx.mixer().valid()) {
+        ctx.mixer().stop(m_decoders[i]->voice);
+        m_dying.push_back(std::move(m_decoders[i]));
+      }
+      if (i != m_decoders.size() - 1)
+        m_decoders[i] = std::move(m_decoders.back());
+      m_decoders.pop_back();
+    }
+  }
+
+  void sweep_dying(nxe::ModuleContext &ctx) {
+    const bool mixer_gone = !ctx.mixer().valid();
+    for (usize i = m_dying.size(); i-- > 0;)
+      if (mixer_gone || !ctx.mixer().is_playing(m_dying[i]->voice)) {
+        if (i != m_dying.size() - 1)
+          m_dying[i] = std::move(m_dying.back());
+        m_dying.pop_back();
       }
   }
 
@@ -339,7 +414,10 @@ private:
   }
 
   VideoRenderer m_renderer;
-  nx::vector<Decoder> m_decoders;
+  nx::vector<nx::unique_ptr<Decoder>> m_decoders;
+  // Decoders whose entity is gone but whose voice the audio thread may still be
+  // rendering. Kept until the mixer says the voice has ended, then dropped.
+  nx::vector<nx::unique_ptr<Decoder>> m_dying;
   nx::vector<Planes> m_planes;
   u32 m_sampler = 0;
   bool m_can_draw = false;

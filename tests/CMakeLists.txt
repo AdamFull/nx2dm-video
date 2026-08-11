@@ -8,13 +8,14 @@ add_executable(nx_video_tests
         test_video_shader.cpp
         test_video_decode.cpp
         ../video_source.cpp
-        ../video_decode.cpp)
+        ../video_decode.cpp
+        ../video_audio.cpp)
 
 target_include_directories(nx_video_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/engine" "${CMAKE_SOURCE_DIR}/modules")
 
 target_link_libraries(nx_video_tests
-        PRIVATE nx::test nx::foundation nx::rhi nx::vpx nx::webm
+        PRIVATE nx::test nx::foundation nx::rhi nx::vpx nx::webm nx::opus
         nx::compile_options)
 
 if (ANDROID)

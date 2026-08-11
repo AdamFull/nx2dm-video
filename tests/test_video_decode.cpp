@@ -10,10 +10,13 @@
 
 #include "framework/nxtest.h"
 
+#include "video/video_audio.h"
 #include "video/video_decode.h"
 #include "video/video_source.h"
 
 #include "core/foundation/vfs/vfs.h"
+
+#include <cstdlib>
 
 namespace {
 
@@ -113,6 +116,46 @@ TEST_CASE("video pacing: the frame shown is the one the clock has reached") {
   REQUIRE(g != nullptr);
   CHECK(g->pts > 0.29);
   CHECK(g->pts < 0.31);
+}
+
+TEST_CASE("video audio: the Opus track decodes to 48 kHz PCM, and has sound") {
+  const MountedFixtures fixtures;
+  REQUIRE(fixtures.ok);
+
+  // test_audio.webm is the video fixture plus a 440 Hz sine on an Opus track.
+  nxe::audio::DecoderPtr audio =
+      nxm::video::open_webm_opus("/test_audio.webm");
+  REQUIRE(audio != nullptr);
+  CHECK(audio->format().sample_rate == 48000u);
+  CHECK(audio->format().channels == 1u);
+
+  const u32 ch = audio->format().channels;
+  std::vector<i16> buf(nx::cast<usize>(48000u) * ch);
+
+  const u64 first = audio->read(buf.data(), 48000);
+  CHECK(first > 0);
+  // A sine, not silence: something well clear of the noise floor comes out.
+  i16 peak = 0;
+  for (u64 i = 0; i < first * ch; ++i)
+    peak = nx::max<i16>(peak, nx::cast<i16>(std::abs(nx::cast<int>(buf[i]))));
+  CHECK(peak > 1000);
+
+  // The whole ~3 s clip decodes and then ends.
+  u64 total = first;
+  for (;;) {
+    const u64 n = audio->read(buf.data(), 48000);
+    if (n == 0)
+      break;
+    total += n;
+    if (total > nx::cast<u64>(48000) * 10) // runaway guard
+      break;
+  }
+  CHECK(total > 120000); // at least ~2.5 s of the 3 s clip
+  CHECK(total < 180000); // and not much past 3 s
+
+  // A missing track is a null decoder, and the video fixture has no audio.
+  CHECK(nxm::video::open_webm_opus("/test.webm") == nullptr);
+  CHECK(nxm::video::open_webm_opus("/nope.webm") == nullptr);
 }
 
 TEST_CASE("video pacing: a looping clip never finishes; a plain one does") {

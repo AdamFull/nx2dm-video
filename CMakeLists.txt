@@ -16,7 +16,8 @@ nx_add_video_codecs()
 nx_module(video
         DISPLAY "WebM video playback"
         SOURCES video_module.cpp video_source.cpp video_pass.cpp video_decode.cpp
-        DEPENDS nx::vpx nx::webm
+                video_audio.cpp
+        DEPENDS nx::vpx nx::webm nx::opus
         ASSETS assets)
 
 if (NX_BUILD_TESTS)
