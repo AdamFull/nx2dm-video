@@ -5,6 +5,7 @@
  */
 
 #include "video/video_component.h"
+#include "video/video_decode.h"
 #include "video/video_pass.h"
 #include "video/video_source.h"
 
@@ -141,9 +142,15 @@ private:
           if (!player.autoplay)
             return;
           Decoder &decoder = decoder_for(entity);
-          if (!decoder.source)
-            decoder.source = std::make_unique<SyntheticSource>(
-                SYNTH_WIDTH, SYNTH_HEIGHT, SYNTH_FPS);
+          if (!decoder.source) {
+            if (!player.clip.empty())
+              decoder.source = open_webm(player.clip);
+            // No clip, or the file would not open: the synthetic pattern keeps
+            // the pipeline exercised rather than drawing nothing.
+            if (!decoder.source)
+              decoder.source = std::make_unique<SyntheticSource>(
+                  SYNTH_WIDTH, SYNTH_HEIGHT, SYNTH_FPS);
+          }
 
           VideoItem item;
           item.owner = entity;
