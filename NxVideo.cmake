@@ -1,7 +1,8 @@
 # libvpx (VP9 decode) and libwebm (WebM demux), the two runtime codecs the
-# video module needs. Neither is a submodule: they are only needed when
-# NX_MODULE_VIDEO is on, and a submodule lands in every recursive clone whether
-# or not the module is built. Fetched on demand, the way Spine is.
+# video module needs. Vendored as module-local submodules under third_party/,
+# pinned to the commits below. A checkout that skipped --recursive, or that
+# wants a different revision, falls back to fetching on demand - so a plain
+# clone still builds the module without a submodule step.
 #
 # libvpx has no CMake build - it is a POSIX-shell configure plus a Perl run-time-
 # CPU-detect generator. We do not run either per build. Instead the generated
@@ -33,9 +34,14 @@ function(nx_add_video_codecs)
 
     set(_config "${CMAKE_CURRENT_LIST_DIR}/third_party/libvpx_config")
 
-    # libvpx
+    # libvpx: an explicit override wins, then the checked-out submodule, then a
+    # fetch for a clone that skipped --recursive.
+    set(_vpx_submodule "${CMAKE_CURRENT_LIST_DIR}/third_party/libvpx")
     if (NX_LIBVPX_SOURCE_DIR)
         set(_vpx_dir "${NX_LIBVPX_SOURCE_DIR}")
+    elseif (EXISTS "${_vpx_submodule}/vpx/vpx_decoder.h")
+        set(_vpx_dir "${_vpx_submodule}")
+        message(STATUS "nx2d: libvpx from submodule")
     else ()
         # A full clone rather than shallow: a commit is not a ref a shallow
         # fetch can name, and pinning a commit is what keeps the decoder stable
@@ -71,8 +77,12 @@ function(nx_add_video_codecs)
     set_target_properties(nx_vpx PROPERTIES FOLDER "third_party")
 
     # libwebm - the mkvparser only; the muxer and the sample apps are not built.
+    set(_webm_submodule "${CMAKE_CURRENT_LIST_DIR}/third_party/libwebm")
     if (NX_LIBWEBM_SOURCE_DIR)
         set(_webm_dir "${NX_LIBWEBM_SOURCE_DIR}")
+    elseif (EXISTS "${_webm_submodule}/mkvparser/mkvparser.h")
+        set(_webm_dir "${_webm_submodule}")
+        message(STATUS "nx2d: libwebm from submodule")
     else ()
         FetchContent_Declare(libwebm
                 GIT_REPOSITORY "${NX_LIBWEBM_REPOSITORY}"
