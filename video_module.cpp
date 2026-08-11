@@ -41,6 +41,7 @@ constexpr f64 SYNTH_FPS = 30.0;
 struct VideoItem {
   nxe::scene::Entity owner{};
   glm::vec4 rect{-1.f, -1.f, 1.f, 1.f};
+  f64 pts = 0.0;
   VideoFrame frame;
 };
 
@@ -49,11 +50,11 @@ struct VideoChannel {
   void clear() { items.clear(); }
 };
 
-/// A clip's decode state. Simulation-thread only: created and advanced by the
-/// present system, never touched by the renderer.
+/// A clip's decode and playback state. Simulation-thread only: created and
+/// advanced by the present system, never touched by the renderer.
 struct Decoder {
   nxe::scene::Entity owner{};
-  SourcePtr source;
+  PacedPlayback playback;
   bool touched = false;
 };
 
@@ -66,6 +67,7 @@ struct Planes {
   nxe::rhi::TextureHandle cr;
   u32 width = 0;
   u32 height = 0;
+  f64 uploaded_pts = -1.0;
   bool touched = false;
 };
 
@@ -95,8 +97,8 @@ public:
     // uploader is the render thread's alone (see vk_upload.h).
     ctx.schedule().define(
         PRESENT_SYSTEM,
-        nxe::sys::SystemFn([this, &ctx](const nxe::sys::Context &) {
-          present(ctx);
+        nxe::sys::SystemFn([this, &ctx](const nxe::sys::Context &c) {
+          present(ctx, nx::cast<f64>(c.dt));
         }));
     ctx.schedule().add(nxe::sys::Stage::Present, PRESENT_SYSTEM);
 
@@ -127,7 +129,7 @@ public:
   }
 
 private:
-  void present(nxe::ModuleContext &ctx) {
+  void present(nxe::ModuleContext &ctx, const f64 dt) {
     nxe::r2d::FramePacket *const packet = ctx.frame_packet();
     if (packet == nullptr)
       return;
@@ -142,27 +144,29 @@ private:
           if (!player.autoplay)
             return;
           Decoder &decoder = decoder_for(entity);
-          if (!decoder.source) {
+          if (!decoder.playback.valid()) {
+            SourcePtr source;
             if (!player.clip.empty())
-              decoder.source = open_webm(player.clip);
+              source = open_webm(player.clip);
             // No clip, or the file would not open: the synthetic pattern keeps
             // the pipeline exercised rather than drawing nothing.
-            if (!decoder.source)
-              decoder.source = std::make_unique<SyntheticSource>(
-                  SYNTH_WIDTH, SYNTH_HEIGHT, SYNTH_FPS);
+            if (!source)
+              source = std::make_unique<SyntheticSource>(SYNTH_WIDTH,
+                                                         SYNTH_HEIGHT,
+                                                         SYNTH_FPS);
+            decoder.playback.reset(std::move(source), player.looping);
           }
+
+          const VideoFrame *const frame = decoder.playback.advance(dt);
+          if (frame == nullptr)
+            return;
 
           VideoItem item;
           item.owner = entity;
           item.rect = player.fullscreen ? glm::vec4{-1.f, -1.f, 1.f, 1.f}
                                         : player.rect;
-          if (!decoder.source->next(item.frame)) {
-            if (!player.looping)
-              return;
-            decoder.source->restart();
-            if (!decoder.source->next(item.frame))
-              return;
-          }
+          item.pts = frame->pts;
+          item.frame = *frame; // copied into the per-frame packet, race-free
           channel.items.push_back(std::move(item));
         });
 
@@ -187,7 +191,12 @@ private:
       Planes &planes = planes_for(device, item.owner, item.frame);
       if (!planes.y.valid())
         continue;
-      upload(device, planes, item.frame);
+      // The present system re-emits the current frame every tick; only a new
+      // one is worth the copy to the GPU.
+      if (planes.uploaded_pts != item.pts) {
+        upload(device, planes, item.frame);
+        planes.uploaded_pts = item.pts;
+      }
 
       VideoDraw draw;
       draw.rect = item.rect;
@@ -298,6 +307,7 @@ private:
     }
     planes.width = 0;
     planes.height = 0;
+    planes.uploaded_pts = -1.0; // fresh textures need the next frame uploaded
   }
 
   static void upload(nxe::rhi::Device &device, const Planes &planes,

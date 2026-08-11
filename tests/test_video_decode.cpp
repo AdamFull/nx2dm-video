@@ -82,3 +82,59 @@ TEST_CASE("video decode: a missing clip is a null source, not a crash") {
   REQUIRE(fixtures.ok);
   CHECK(nxm::video::open_webm("/nope.webm") == nullptr);
 }
+
+TEST_CASE("video pacing: the frame shown is the one the clock has reached") {
+  // A source at 10 fps: frame k is due at k/10 s. The pacer must show the
+  // newest frame whose PTS the clock has passed, and no newer.
+  nxm::video::PacedPlayback pacer;
+  pacer.reset(std::make_unique<nxm::video::SyntheticSource>(16, 16, 10.0),
+              false);
+
+  const nxm::video::VideoFrame *f = pacer.advance(0.0);
+  REQUIRE(f != nullptr);
+  CHECK(f->pts < 0.001); // frame 0
+
+  f = pacer.advance(0.05); // clock 0.05: still frame 0
+  REQUIRE(f != nullptr);
+  CHECK(f->pts < 0.001);
+
+  f = pacer.advance(0.05); // clock 0.10: frame 1
+  REQUIRE(f != nullptr);
+  CHECK(f->pts > 0.09);
+  CHECK(f->pts < 0.11);
+
+  f = pacer.advance(0.25); // clock 0.35: frame 3, having dropped 2
+  REQUIRE(f != nullptr);
+  CHECK(f->pts > 0.29);
+  CHECK(f->pts < 0.31);
+
+  // A held clock shows the same frame, not the next.
+  const nxm::video::VideoFrame *g = pacer.advance(0.0);
+  REQUIRE(g != nullptr);
+  CHECK(g->pts > 0.29);
+  CHECK(g->pts < 0.31);
+}
+
+TEST_CASE("video pacing: a looping clip never finishes; a plain one does") {
+  const MountedFixtures fixtures;
+  REQUIRE(fixtures.ok);
+
+  // Looping: run well past the ~3 s clip and it is still producing frames.
+  nxm::video::PacedPlayback looping;
+  looping.reset(nxm::video::open_webm("/test.webm"), true);
+  REQUIRE(looping.advance(0.0) != nullptr);
+  for (int i = 0; i < 200; ++i) // 10 s
+    looping.advance(0.05);
+  CHECK(!looping.finished());
+  CHECK(looping.advance(0.05) != nullptr);
+
+  // Not looping: it finishes and holds the last frame.
+  nxm::video::PacedPlayback once;
+  once.reset(nxm::video::open_webm("/test.webm"), false);
+  const nxm::video::VideoFrame *last = nullptr;
+  for (int i = 0; i < 200; ++i)
+    if (const nxm::video::VideoFrame *f = once.advance(0.05))
+      last = f;
+  CHECK(once.finished());
+  CHECK(last != nullptr);
+}

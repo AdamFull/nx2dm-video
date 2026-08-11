@@ -1,5 +1,7 @@
 #include "video/video_source.h"
 
+#include <utility>
+
 namespace nxm::video {
 
 SyntheticSource::SyntheticSource(const u32 width, const u32 height,
@@ -41,6 +43,63 @@ bool SyntheticSource::next(VideoFrame &out) {
 
   ++m_frame;
   return true;
+}
+
+void PacedPlayback::reset(SourcePtr source, const bool looping) {
+  m_source = std::move(source);
+  m_looping = looping;
+  m_clock = 0.0;
+  m_has_current = false;
+  m_has_next = false;
+  m_finished = false;
+}
+
+bool PacedPlayback::prime() {
+  if (!m_source->next(m_current)) {
+    m_finished = true;
+    return false;
+  }
+  m_has_current = true;
+  // Do not run the clock ahead of the first frame: a source whose first PTS is
+  // not zero should still show frame one before anything is dropped.
+  if (m_clock < m_current.pts)
+    m_clock = m_current.pts;
+  m_has_next = m_source->next(m_next);
+  return true;
+}
+
+const VideoFrame *PacedPlayback::advance(const f64 dt) {
+  if (m_source == nullptr)
+    return nullptr;
+
+  m_clock += dt;
+  if (!m_has_current && !prime())
+    return nullptr;
+
+  for (;;) {
+    // Catch up to the clock, dropping every frame it has already passed.
+    while (m_has_next && m_next.pts <= m_clock) {
+      std::swap(m_current, m_next);
+      m_has_next = m_source->next(m_next);
+    }
+    if (m_has_next)
+      break; // the next frame is in hand and not yet due
+
+    // Decode reached the end of the stream.
+    if (!m_looping) {
+      m_finished = true; // hold the last frame
+      break;
+    }
+    // Loop: restart the timeline from the opening keyframe. The clock resets, so
+    // the wrap costs at most one frame of drift, which no one sees.
+    m_source->restart();
+    m_clock = 0.0;
+    m_has_current = false;
+    if (!prime())
+      return nullptr;
+  }
+
+  return m_has_current ? &m_current : nullptr;
 }
 
 } // namespace nxm::video

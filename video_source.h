@@ -70,4 +70,35 @@ private:
   u64 m_frame = 0;
 };
 
+class PacedPlayback {
+public:
+  PacedPlayback() = default;
+
+  PacedPlayback(const PacedPlayback &) = delete;
+  PacedPlayback &operator=(const PacedPlayback &) = delete;
+  PacedPlayback(PacedPlayback &&) = default;
+  PacedPlayback &operator=(PacedPlayback &&) = default;
+
+  void reset(SourcePtr source, bool looping);
+  [[nodiscard]] bool valid() const noexcept { return m_source != nullptr; }
+  /// Emission over and, for a non-looping clip, the last frame reached.
+  [[nodiscard]] bool finished() const noexcept { return m_finished; }
+
+  /// Advances the clock by @p dt seconds and returns the frame to show now, or
+  /// null before the first frame has decoded.
+  [[nodiscard]] const VideoFrame *advance(f64 dt);
+
+private:
+  [[nodiscard]] bool prime();
+
+  SourcePtr m_source;
+  VideoFrame m_current;
+  VideoFrame m_next;
+  f64 m_clock = 0.0;
+  bool m_has_current = false;
+  bool m_has_next = false;
+  bool m_looping = false;
+  bool m_finished = false;
+};
+
 } // namespace nxm::video
