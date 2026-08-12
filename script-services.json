@@ -23,6 +23,10 @@
     {
       "name": "video_position",
       "signature": "(number)->(number)"
+    },
+    {
+      "name": "video_pause",
+      "signature": "(number,boolean)->(boolean)"
     }
   ]
 }

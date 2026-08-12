@@ -77,6 +77,7 @@ struct Decoder {
   nxe::audio::VoiceHandle voice;
   u64 last_dsp = 0;
   bool audio_started = false;
+  bool paused = false;
   bool touched = false;
 };
 
@@ -240,7 +241,22 @@ private:
         player.seek_to = -1.0;
       }
 
-      const f64 step = advance_clock(ctx, decoder, dt);
+      f64 step = 0.0;
+      if (player.paused) {
+        if (decoder.audio_started && !decoder.paused) {
+          if (ctx.mixer().valid())
+            ctx.mixer().set_paused(decoder.voice, true);
+          decoder.paused = true;
+        }
+      } else {
+        if (decoder.audio_started && decoder.paused) {
+          if (ctx.mixer().valid())
+            ctx.mixer().set_paused(decoder.voice, false);
+          decoder.paused = false;
+          decoder.last_dsp = ctx.mixer().dsp_frame();
+        }
+        step = advance_clock(ctx, decoder, dt);
+      }
       const VideoFrame *const frame = decoder.playback.advance(step, budget);
       player.finished = decoder.playback.finished();
       if (frame == nullptr)
@@ -386,6 +402,7 @@ private:
     decoder.audio = std::move(stream);
     decoder.voice = ctx.mixer().play(*decoder.audio, {});
     decoder.audio_started = true;
+    decoder.paused = false; // a fresh voice starts running
     decoder.last_dsp = ctx.mixer().dsp_frame();
   }
 

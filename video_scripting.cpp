@@ -61,6 +61,14 @@ void expose_video_services(nxe::script::Host &host, nxe::ModuleContext &ctx) {
     const VideoPlayer *const player = player_of(ctx, e);
     return player == nullptr ? 0.f : nx::cast<f32>(player->position);
   });
+
+  host.expose_as("video_pause", [&ctx](const sys::Entity e, const bool on) {
+    VideoPlayer *const player = player_of(ctx, e);
+    if (player == nullptr)
+      return false;
+    player->paused = on;
+    return true;
+  });
 }
 
 } // namespace nxm::video
