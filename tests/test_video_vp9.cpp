@@ -11,9 +11,11 @@
 
 #include "framework/nxtest.h"
 
+#include "video/video_demux.h"
 #include "video/video_hw.h"
 
 #include "core/rendering/rhi/device.h"
+#include "core/rendering/rhi/vulkan/vk_av1.h"
 #include "core/rendering/rhi/vulkan/vk_video.h"
 #include "core/rendering/rhi/vulkan/vk_vp9.h"
 
@@ -544,4 +546,37 @@ TEST_CASE("vp9 parse: a truncated or empty frame is rejected, not walked off") {
   // out and the parse fails rather than reading past the buffer.
   CHECK_FALSE(rhi::parse_vp9_frame_header(frames[0].bytes.data(), 2, nullptr,
                                           nullptr, header));
+}
+
+TEST_CASE("av1 parse: the sequence header from the WebM av1C is coherent") {
+  REQUIRE(nx::vfs::initialize());
+  struct Unmount {
+    ~Unmount() { nx::vfs::unmount_all(); }
+  } unmount;
+  REQUIRE(nx::vfs::mount("/", nx::vfs::make_host_device(NX_VIDEO_FIXTURE_DIR), 0)
+              .valid());
+
+  // The AV1 track's CodecPrivate is the av1C record; its sequence header carries
+  // the profile, dimensions and colour the fixture was made with (320x240,
+  // main, 8-bit, 4:2:0). A wrong field count would shift every value after it.
+  nxm::video::WebmVideoDemux demux;
+  REQUIRE(demux.open("/test_av1.webm", "V_AV01", "V_AV1"));
+  const std::span<const u8> priv = demux.codec_private();
+  REQUIRE(!priv.empty());
+
+  nxe::rhi::Av1SequenceHeader seq;
+  REQUIRE(nxe::rhi::parse_av1_codec_private(
+      priv.data(), nx::cast<u32>(priv.size()), seq));
+  CHECK(seq.valid);
+  CHECK(seq.header.seq_profile == STD_VIDEO_AV1_PROFILE_MAIN);
+  CHECK(seq.header.max_frame_width_minus_1 == 319u);
+  CHECK(seq.header.max_frame_height_minus_1 == 239u);
+  CHECK(seq.color.BitDepth == 8u);
+  CHECK(seq.color.subsampling_x == 1u);
+  CHECK(seq.color.subsampling_y == 1u);
+  CHECK(seq.color.flags.mono_chrome == 0u);
+
+  // A record too short for even the av1C fixed header is a clean false.
+  nxe::rhi::Av1SequenceHeader tiny;
+  CHECK_FALSE(nxe::rhi::parse_av1_codec_private(priv.data(), 3u, tiny));
 }
