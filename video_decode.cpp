@@ -147,6 +147,58 @@ public:
   void restart() override {
     // VP9 can only resume from a keyframe, which the first cluster begins with,
     // so a clean seek to start is a decoder reset plus a cursor rewind.
+    reset_decoder();
+    m_entry = nullptr;
+    m_at_entry = false;
+    m_cluster = m_segment != nullptr ? m_segment->GetFirst() : nullptr;
+  }
+
+  [[nodiscard]] bool seek(const f64 target_seconds) override {
+    if (m_segment == nullptr)
+      return false;
+    const long long target_ns =
+        nx::cast<long long>(nx::max(target_seconds, 0.0) * 1e9);
+
+    const mkvparser::Cluster *key_cluster = nullptr;
+    const mkvparser::BlockEntry *key_entry = nullptr;
+    bool passed = false;
+    for (const mkvparser::Cluster *cluster = m_segment->GetFirst();
+         cluster != nullptr && !cluster->EOS() && !passed;
+         cluster = m_segment->GetNext(cluster)) {
+      const mkvparser::BlockEntry *entry = nullptr;
+      long status = cluster->GetFirst(entry);
+      while (status >= 0 && entry != nullptr && !entry->EOS()) {
+        const mkvparser::Block *const block = entry->GetBlock();
+        if (block != nullptr && block->GetTrackNumber() == m_track_number) {
+          if (block->GetTime(cluster) > target_ns) {
+            passed = true;
+            break;
+          }
+          if (block->IsKey()) {
+            key_cluster = cluster;
+            key_entry = entry;
+          }
+        }
+        const mkvparser::BlockEntry *next = nullptr;
+        status = cluster->GetNext(entry, next);
+        entry = next;
+      }
+    }
+
+    if (key_entry == nullptr) {
+      restart(); // target before the first keyframe: the start is the answer
+      return true;
+    }
+
+    reset_decoder();
+    m_cluster = key_cluster;
+    m_entry = key_entry;
+    m_at_entry = true; // pull_video_frame decodes this block before advancing
+    return m_decoder_ready;
+  }
+
+private:
+  void reset_decoder() {
     if (m_decoder_ready) {
       vpx_codec_destroy(&m_codec);
       m_decoder_ready =
@@ -154,11 +206,8 @@ public:
           VPX_CODEC_OK;
     }
     m_iter = nullptr;
-    m_entry = nullptr;
-    m_cluster = m_segment != nullptr ? m_segment->GetFirst() : nullptr;
   }
 
-private:
   [[nodiscard]] bool fill(VideoFrame &out, const vpx_image_t *img) {
     if (img->fmt != VPX_IMG_FMT_I420) {
       nx::logw("video: unsupported pixel format {:#x}",
@@ -191,9 +240,11 @@ private:
   [[nodiscard]] bool pull_video_frame(const u8 *&data, long &len, f64 &pts) {
     while (m_cluster != nullptr && !m_cluster->EOS()) {
       long status = 0;
-      if (m_entry == nullptr)
+      if (m_at_entry) {
+        m_at_entry = false; // a seek left m_entry on the block to decode next
+      } else if (m_entry == nullptr) {
         status = m_cluster->GetFirst(m_entry);
-      else {
+      } else {
         const mkvparser::BlockEntry *next = nullptr;
         status = m_cluster->GetNext(m_entry, next);
         m_entry = next;
@@ -228,6 +279,7 @@ private:
   mkvparser::Segment *m_segment = nullptr;
   const mkvparser::Cluster *m_cluster = nullptr;
   const mkvparser::BlockEntry *m_entry = nullptr;
+  bool m_at_entry = false;
 
   vpx_codec_ctx_t m_codec{};
   vpx_codec_iter_t m_iter = nullptr;

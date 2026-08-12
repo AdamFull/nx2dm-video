@@ -16,6 +16,7 @@
 
 #include "core/foundation/vfs/vfs.h"
 
+#include <cmath>
 #include <cstdlib>
 
 namespace {
@@ -63,6 +64,15 @@ private:
   f64 m_fps;
   u64 m_frame = 0;
 };
+
+[[nodiscard]] bool same(const nx::vector<u8> &a, const nx::vector<u8> &b) {
+  if (a.size() != b.size())
+    return false;
+  for (usize i = 0; i < a.size(); ++i)
+    if (a[i] != b[i])
+      return false;
+  return true;
+}
 
 [[nodiscard]] int decode_all(nxm::video::FrameSource &src) {
   nxm::video::VideoFrame frame;
@@ -251,4 +261,57 @@ TEST_CASE("video pacing: a looping clip never finishes; a plain one does") {
       last = f;
   CHECK(once.finished());
   CHECK(last != nullptr);
+}
+
+TEST_CASE("video seek: keyframe-accurate, and matches linear playback") {
+  const MountedFixtures fixtures;
+  REQUIRE(fixtures.ok);
+
+  // Play the clip through once to learn its timeline and keep one frame to
+  // compare a sought copy of it against, pixel for pixel.
+  constexpr usize K = 20;
+  nx::vector<f64> pts;
+  nxm::video::VideoFrame reference;
+  {
+    const nxm::video::SourcePtr src = nxm::video::open_webm("/test.webm");
+    REQUIRE(src != nullptr);
+    nxm::video::VideoFrame frame;
+    usize i = 0;
+    while (src->next(frame)) {
+      pts.push_back(frame.pts);
+      if (i == K)
+        reference = frame;
+      ++i;
+    }
+  }
+  REQUIRE(pts.size() > K + 2);
+
+  nxm::video::PacedPlayback pacer;
+  pacer.reset(nxm::video::open_webm("/test.webm"), false);
+  REQUIRE(pacer.advance(0.0) != nullptr);
+
+  // A forward seek lands on the frame at that time - and decodes it correctly,
+  // which only a reset to the right keyframe gives: the pixels must match the
+  // ones the linear pass produced for the same frame.
+  REQUIRE(pacer.seek(pts[K]));
+  const nxm::video::VideoFrame *got = pacer.advance(0.0);
+  REQUIRE(got != nullptr);
+  CHECK(std::fabs(got->pts - pts[K]) < 1e-6);
+  REQUIRE(got->width == reference.width);
+  REQUIRE(got->height == reference.height);
+  CHECK(same(got->y, reference.y));
+  CHECK(same(got->cb, reference.cb));
+  CHECK(same(got->cr, reference.cr));
+
+  // Seeking home returns the first frame.
+  REQUIRE(pacer.seek(0.0));
+  got = pacer.advance(0.0);
+  REQUIRE(got != nullptr);
+  CHECK(got->pts < pts[1]);
+
+  // Seeking past the end holds the last frame rather than failing.
+  REQUIRE(pacer.seek(pts.back() + 10.0));
+  got = pacer.advance(0.0);
+  REQUIRE(got != nullptr);
+  CHECK(got->pts >= pts.back() - 1e-6);
 }

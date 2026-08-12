@@ -55,6 +55,20 @@ void PacedPlayback::reset(SourcePtr source, const bool looping) {
   m_eos = false;
 }
 
+bool PacedPlayback::seek(const f64 target_seconds) {
+  if (m_source == nullptr)
+    return false;
+  const f64 target = target_seconds > 0.0 ? target_seconds : 0.0;
+  if (!m_source->seek(target))
+    return false;
+  m_clock = target;
+  m_has_current = false;
+  m_has_next = false;
+  m_eos = false;
+  m_finished = false;
+  return true;
+}
+
 const VideoFrame *PacedPlayback::advance(const f64 dt, i32 *const budget) {
   if (m_source == nullptr)
     return nullptr;

@@ -44,6 +44,11 @@ public:
 
   /// Seek back to the first frame.
   virtual void restart() = 0;
+
+  [[nodiscard]] virtual bool seek(f64 target_seconds) {
+    (void)target_seconds;
+    return false;
+  }
 };
 
 /// std::unique_ptr rather than nx::unique_ptr, deliberately: it owns an
@@ -62,6 +67,10 @@ public:
 
   [[nodiscard]] bool next(VideoFrame &out) override;
   void restart() override { m_frame = 0; }
+  [[nodiscard]] bool seek(f64 target_seconds) noexcept override {
+    m_frame = target_seconds > 0.0 ? nx::cast<u64>(target_seconds * m_fps) : 0;
+    return true;
+  }
 
 private:
   u32 m_width;
@@ -86,6 +95,8 @@ public:
 
   /// Advances the clock by @p dt seconds and returns the frame to show now, or
   [[nodiscard]] const VideoFrame *advance(f64 dt, i32 *budget = nullptr);
+
+  [[nodiscard]] bool seek(f64 target_seconds);
 
 private:
   SourcePtr m_source;
