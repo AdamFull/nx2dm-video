@@ -427,7 +427,7 @@ private:
   nx::vector<Planes> m_planes;
   u32 m_sampler = 0;
   bool m_can_draw = false;
-  bool m_audio_enabled = false;
+  bool m_audio_enabled = true;
 };
 
 } // namespace
