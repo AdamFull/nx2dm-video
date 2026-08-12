@@ -10,6 +10,7 @@
 #include "core/rendering/rhi/descs.h"
 #include "core/rendering/rhi/device.h"
 
+#include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
 #include <span>
 
@@ -23,18 +24,19 @@ struct VideoPush {
   u32 cb_plane = 0;
   u32 cr_plane = 0;
   u32 sampler_index = 0;
+  glm::vec2 uv_scale{1.f, 1.f};
 };
 static_assert(sizeof(VideoPush) <= nxe::rhi::PUSH_CONSTANT_SIZE,
               "the video push block must fit the guaranteed push range");
 
-/// One quad: its destination rect in NDC and the three plane slots, already
-/// resolved to bindless indices.
 struct VideoDraw {
   glm::vec4 rect{-1.f, -1.f, 1.f, 1.f};
   u32 y_plane = 0;
   u32 cb_plane = 0;
   u32 cr_plane = 0;
   u32 sampler_index = 0;
+  glm::vec2 uv_scale{1.f, 1.f};
+  bool rgba = false;
 };
 
 class VideoRenderer {
@@ -58,7 +60,8 @@ private:
                                      nxe::rhi::Format format);
 
   nxe::rhi::ShaderHandle m_shader;
-  nxe::rhi::PipelineHandle m_pipeline;
+  nxe::rhi::PipelineHandle m_pipeline;      ///< planar YCbCr (fs_main)
+  nxe::rhi::PipelineHandle m_pipeline_rgba; ///< hardware RGBA (fs_main_rgba)
   nxe::rhi::Format m_format = nxe::rhi::Format::Unknown;
 };
 

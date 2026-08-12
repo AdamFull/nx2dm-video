@@ -14,6 +14,7 @@ struct VideoPush {
     uint cb_plane;
     uint cr_plane;
     uint sampler_index;
+    float2 uv_scale;
 };
 
 [[vk::push_constant]]
@@ -38,6 +39,12 @@ VertexOutput vs_main(uint vertex_id: SV_VertexID) {
     // 0 of the image samples at the bottom and the video is upside down.
     output.uv = float2(corner.x, 1.0 - corner.y);
     return output;
+}
+
+[shader("fragment")]
+float4 fs_main_rgba(VertexOutput input): SV_Target {
+    return float4(sample_texture(pc.y_plane, pc.sampler_index,
+                                 input.uv * pc.uv_scale).rgb, 1.0);
 }
 
 [shader("fragment")]

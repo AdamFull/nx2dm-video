@@ -37,6 +37,7 @@ struct VideoPush {
   u32 cb_plane = 0;
   u32 cr_plane = 0;
   u32 sampler_index = 0;
+  float uv_scale[2] = {1.f, 1.f};
 };
 
 struct TestDevice {
@@ -165,6 +166,91 @@ struct Rendered {
   return out;
 }
 
+[[nodiscard]] rhi::TextureHandle make_rgba(rhi::Device &device,
+                                           const std::vector<u8> &rgba,
+                                           const nx::string_view name) {
+  const rhi::TextureHandle tex = device.create_texture({
+      .name = name,
+      .format = rhi::Format::RGBA8_UNORM,
+      .width = TARGET,
+      .height = TARGET,
+      .usage = rhi::TextureUsage::Sampled | rhi::TextureUsage::CopyDst,
+  });
+  if (!tex.valid())
+    return {};
+  rhi::ImageSubresource sub{};
+  sub.size = nx::cast<u64>(rgba.size());
+  sub.width = TARGET;
+  sub.height = TARGET;
+  sub.depth = 1;
+  sub.row_pitch = TARGET * 4;
+  const rhi::ImageSubresource layout[1] = {sub};
+  (void)device.uploader().upload_texture(
+      tex, std::span<const u8>(rgba.data(), rgba.size()),
+      std::span<const rhi::ImageSubresource>(layout, 1));
+  return tex;
+}
+
+// Draws one full-screen quad from a single RGBA texture through fs_main_rgba.
+[[nodiscard]] Rendered draw_rgba(rhi::Device &device, rhi::ShaderHandle shader,
+                                 rhi::TextureHandle source,
+                                 rhi::TextureHandle target,
+                                 rhi::SamplerHandle sampler) {
+  const rhi::PipelineHandle pipeline = device.create_graphics_pipeline({
+      .name = "video.rgba",
+      .vertex = {.shader = shader, .entry_point = "vs_main"},
+      .fragment = {.shader = shader, .entry_point = "fs_main_rgba"},
+      .color_formats = {rhi::Format::RGBA8_UNORM},
+      .color_count = 1,
+  });
+  if (!pipeline.valid())
+    return {};
+
+  VideoPush push;
+  push.y_plane = device.texture_index(source);
+  push.sampler_index = device.sampler_index(sampler);
+
+  rhi::CommandContext cmd;
+  if (!device.begin_headless_frame(cmd)) {
+    device.destroy_pipeline(pipeline);
+    return {};
+  }
+  cmd.barrier(rhi::TextureBarrier{.texture = target,
+                                  .from = rhi::ResourceState::Undefined,
+                                  .to = rhi::ResourceState::ColorAttachment});
+  rhi::RenderPassDesc pass = {};
+  pass.name = "video.rgba";
+  pass.color[0].texture = target;
+  pass.color[0].load = rhi::LoadOp::Clear;
+  pass.color[0].store = rhi::StoreOp::Store;
+  pass.color[0].clear = rhi::clear_color(0.f, 0.f, 0.f, 1.f);
+  pass.color_count = 1;
+  cmd.begin_render_pass(pass);
+  cmd.set_viewport(
+      {.width = nx::cast<f32>(TARGET), .height = nx::cast<f32>(TARGET)});
+  cmd.set_scissor({{0, 0}, {TARGET, TARGET}});
+  cmd.bind_pipeline(pipeline);
+  cmd.push_constants(&push, sizeof(push));
+  cmd.draw(6, 1);
+  cmd.end_render_pass();
+  cmd.barrier(rhi::TextureBarrier{.texture = target,
+                                  .from = rhi::ResourceState::ColorAttachment,
+                                  .to = rhi::ResourceState::CopySrc});
+  if (!device.end_headless_frame()) {
+    device.destroy_pipeline(pipeline);
+    return {};
+  }
+  device.wait_idle();
+
+  Rendered out;
+  out.pixels = device.uploader().read_texture(target);
+  out.ok = out.pixels.data != nullptr;
+  if (out.ok)
+    device.uploader().wait(out.pixels.ticket);
+  device.destroy_pipeline(pipeline);
+  return out;
+}
+
 [[nodiscard]] usize texel(const u32 row, const u32 col) {
   return (nx::cast<usize>(row) * TARGET + col) * 4;
 }
@@ -226,6 +312,61 @@ TEST_CASE("video shader: a grey frame converts to grey (BT.709)") {
   device.destroy_texture(crt);
   device.destroy_texture(cbt);
   device.destroy_texture(yt);
+  device.destroy_shader(shader);
+}
+
+TEST_CASE("video shader: the RGBA path draws the frame, right way up") {
+  TestDevice fixture;
+  if (!fixture.ready)
+    SKIP("no usable RHI device");
+  rhi::Device &device = fixture.device;
+
+  const rhi::ShaderHandle shader = load_video(device);
+  if (!shader.valid())
+    SKIP("shaders are not built in this configuration");
+
+  // A hardware frame arrives already RGB. Top rows a distinct colour, bottom
+  // rows dark: the colour must pass through untouched and land the right way up.
+  std::vector<u8> rgba(nx::cast<usize>(TARGET) * TARGET * 4, 0u);
+  for (u32 row = 0; row < TARGET; ++row)
+    for (u32 col = 0; col < TARGET; ++col) {
+      const usize p = (nx::cast<usize>(row) * TARGET + col) * 4;
+      const bool top = row < TARGET / 2;
+      rgba[p + 0] = top ? 200u : 20u;
+      rgba[p + 1] = top ? 120u : 20u;
+      rgba[p + 2] = top ? 40u : 20u;
+      rgba[p + 3] = 255u;
+    }
+  const rhi::TextureHandle src = make_rgba(device, rgba, "hw");
+  device.uploader().flush();
+  REQUIRE(src.valid());
+
+  const rhi::SamplerHandle sampler = device.create_sampler({.name = "video"});
+  REQUIRE(sampler.valid());
+  const rhi::TextureHandle target = device.create_texture({
+      .name = "video target",
+      .format = rhi::Format::RGBA8_UNORM,
+      .width = TARGET,
+      .height = TARGET,
+      .usage = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::CopySrc,
+  });
+  REQUIRE(target.valid());
+
+  const Rendered r = draw_rgba(device, shader, src, target, sampler);
+  REQUIRE(r.ok);
+
+  // 1:1 draw with bilinear at texel centres: the colour comes through exact.
+  const usize top = texel(1, TARGET / 2);
+  CHECK(std::abs(int(r.pixels.data[top + 0]) - 200) <= 2);
+  CHECK(std::abs(int(r.pixels.data[top + 1]) - 120) <= 2);
+  CHECK(std::abs(int(r.pixels.data[top + 2]) - 40) <= 2);
+  // Bright, distinct top; dark bottom - upright.
+  CHECK(r.pixels.data[texel(0, TARGET / 2) + 0] > 150u);
+  CHECK(r.pixels.data[texel(TARGET - 1, TARGET / 2) + 0] < 60u);
+
+  device.destroy_texture(target);
+  device.destroy_sampler(sampler);
+  device.destroy_texture(src);
   device.destroy_shader(shader);
 }
 
