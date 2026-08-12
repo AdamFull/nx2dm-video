@@ -17,9 +17,8 @@ struct VideoPlayer {
   nx::string clip;
   bool autoplay = true;
   bool looping = true;
-  /// Cover the whole target. When false, `rect` places it in NDC.
   bool fullscreen = true;
-  /// Destination as (x0, y0, x1, y1) in NDC; used only when !fullscreen.
+  bool world_space = false;
   glm::vec4 rect{-1.f, -1.f, 1.f, 1.f};
   bool finished = false;
 };
