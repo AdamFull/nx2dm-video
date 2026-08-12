@@ -17,7 +17,7 @@ target_include_directories(nx_video_tests PRIVATE
 
 target_link_libraries(nx_video_tests
         PRIVATE nx::test nx::foundation nx::rhi nx::glm nx::vpx nx::webm nx::opus
-        nx::compile_options)
+        nx::vorbis nx::compile_options)
 
 if (ANDROID)
     set(NX_TEST_SHADERS "${NX_ANDROID_SHADER_OUT}")

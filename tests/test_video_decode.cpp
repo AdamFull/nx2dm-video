@@ -239,6 +239,46 @@ TEST_CASE("video audio: the Opus track decodes to 48 kHz PCM, and has sound") {
   CHECK(nxm::video::open_webm_opus("/nope.webm") == nullptr);
 }
 
+TEST_CASE("video audio: a Vorbis track decodes to PCM, and has sound") {
+  const MountedFixtures fixtures;
+  REQUIRE(fixtures.ok);
+
+  const nxe::audio::DecoderPtr audio =
+      nxm::video::open_webm_vorbis("/test_vorbis.webm");
+  REQUIRE(audio != nullptr);
+  CHECK(audio->format().sample_rate == 48000u);
+  CHECK(audio->format().channels == 1u);
+
+  const u32 ch = audio->format().channels;
+  std::vector<i16> buf(nx::cast<usize>(48000u) * ch);
+
+  const u64 first = audio->read(buf.data(), 48000);
+  CHECK(first > 0);
+  i16 peak = 0;
+  for (u64 i = 0; i < first * ch; ++i)
+    peak = nx::max<i16>(peak, nx::cast<i16>(std::abs(nx::cast<int>(buf[i]))));
+  CHECK(peak > 1000); // a 440 Hz sine, not silence
+
+  u64 total = first;
+  for (;;) {
+    const u64 n = audio->read(buf.data(), 48000);
+    if (n == 0)
+      break;
+    total += n;
+    if (total > nx::cast<u64>(48000) * 10)
+      break;
+  }
+  CHECK(total > 100000); // ~2.5 s at 48 kHz
+  CHECK(total < 140000);
+
+  // The codec-agnostic opener picks whichever track the file carries, and each
+  // codec's opener declines the other's file.
+  CHECK(nxm::video::open_webm_audio("/test_vorbis.webm") != nullptr);
+  CHECK(nxm::video::open_webm_audio("/test_audio.webm") != nullptr);
+  CHECK(nxm::video::open_webm_vorbis("/test_audio.webm") == nullptr);
+  CHECK(nxm::video::open_webm_vorbis("/nope.webm") == nullptr);
+}
+
 TEST_CASE("video pacing: a looping clip never finishes; a plain one does") {
   const MountedFixtures fixtures;
   REQUIRE(fixtures.ok);

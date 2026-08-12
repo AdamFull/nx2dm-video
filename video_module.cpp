@@ -365,7 +365,7 @@ private:
                    const VideoPlayer &player) {
     if (player.clip.empty() || !ctx.config().audio || !ctx.mixer().valid())
       return;
-    nxe::audio::DecoderPtr codec = open_webm_opus(player.clip);
+    nxe::audio::DecoderPtr codec = open_webm_audio(player.clip);
     if (!codec)
       return;
     if (!decoder.audio.open(std::move(codec), 1.f, player.looping))
