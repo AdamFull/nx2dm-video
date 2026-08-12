@@ -11,6 +11,7 @@
 #include "framework/nxtest.h"
 
 #include "video/video_audio.h"
+#include "video/video_clip.h"
 #include "video/video_decode.h"
 #include "video/video_demux.h"
 #include "video/video_source.h"
@@ -218,6 +219,22 @@ TEST_CASE("video decode: colour matrix and range come from the container") {
   REQUIRE(untagged->next(sd));
   CHECK(sd.colour.matrix == nxm::video::ColourMatrix::BT601);
   CHECK_FALSE(sd.colour.full_range);
+}
+
+TEST_CASE("video clip: a .nxvid resolves to its source and loop") {
+  const MountedFixtures fixtures;
+  REQUIRE(fixtures.ok);
+
+  // test_clip.nxvid names /test.webm and turns looping off; both must come back
+  // from the descriptor, not the struct defaults (loop defaults to true).
+  nxm::video::VideoClip clip;
+  REQUIRE(nxm::video::load_video_clip("/test_clip.nxvid", clip));
+  CHECK(clip.source == "/test.webm");
+  CHECK_FALSE(clip.loop);
+
+  // A descriptor that will not read is a clean false, not a crash.
+  nxm::video::VideoClip missing;
+  CHECK_FALSE(nxm::video::load_video_clip("/nope.nxvid", missing));
 }
 
 TEST_CASE("video decode: a missing clip is a null source, not a crash") {

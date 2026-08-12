@@ -12,6 +12,7 @@ add_executable(nx_video_tests
         ../video_source.cpp
         ../video_decode.cpp
         ../video_demux.cpp
+        ../video_clip.cpp
         ../video_audio.cpp
         ../video_hw.cpp)
 

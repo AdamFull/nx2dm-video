@@ -5,6 +5,7 @@
  */
 
 #include "video/video_audio.h"
+#include "video/video_clip.h"
 #include "video/video_component.h"
 #include "video/video_decode.h"
 #include "video/video_hw.h"
@@ -45,6 +46,21 @@ constexpr nx::string_view SHADER = "video/video";
 constexpr u32 SYNTH_WIDTH = 640;
 constexpr u32 SYNTH_HEIGHT = 360;
 constexpr f64 SYNTH_FPS = 30.0;
+
+struct ResolvedClip {
+  nx::string source;
+  bool loop = true;
+};
+
+[[nodiscard]] ResolvedClip resolve_clip(const VideoPlayer &player) {
+  if (nx::string_view(player.clip).ends_with(".nxvid")) {
+    VideoClip clip;
+    if (load_video_clip(player.clip, clip))
+      return {clip.source, clip.loop};
+    return {{}, player.looping};
+  }
+  return {player.clip, player.looping};
+}
 
 /// One clip's decoded frame for this frame, handed from the simulation to the
 /// renderer through the frame packet - which is per-frame, so nothing here is
@@ -93,6 +109,10 @@ struct Decoder {
   bool initialized = false;
   bool hw = false;
   f64 hw_clock = 0.0;
+  // The WebM the player's clip resolves to (a .nxvid names one; a raw .webm is
+  // itself) and its loop default, resolved once at init.
+  nx::string source;
+  bool loop = true;
   // Set by the render thread when a non-looping hardware clip ends; read here.
   std::atomic<bool> hw_finished{false};
 };
@@ -251,24 +271,27 @@ private:
       Decoder &decoder = decoder_for(a.entity);
       if (!decoder.initialized) {
         decoder.initialized = true;
+        const ResolvedClip resolved = resolve_clip(player);
+        decoder.source = resolved.source;
+        decoder.loop = resolved.loop;
         decoder.hw = hw_decode_available(ctx.device()) &&
-                     webm_is_vp9(player.clip);
+                     webm_is_vp9(decoder.source);
         if (!decoder.hw) {
           SourcePtr source;
-          if (!player.clip.empty()) {
+          if (!decoder.source.empty()) {
             // Android's hardware block, when it can read this clip; nullptr on
             // every other platform, so the CPU decoder takes over below.
-            source = open_media_codec(player.clip);
+            source = open_media_codec(decoder.source);
             if (!source)
-              source = open_webm(player.clip);
+              source = open_webm(decoder.source);
           }
           if (!source)
             source = std::make_unique<SyntheticSource>(SYNTH_WIDTH, SYNTH_HEIGHT,
                                                        SYNTH_FPS);
-          decoder.playback.reset(std::move(source), player.looping);
+          decoder.playback.reset(std::move(source), decoder.loop);
         }
         if (m_audio_enabled)
-          start_audio(ctx, decoder, player);
+          start_audio(ctx, decoder);
       }
 
       if (player.seek_to >= 0.0) {
@@ -277,7 +300,7 @@ private:
         else
           (void)decoder.playback.seek(player.seek_to);
         if (decoder.audio_started)
-          reseat_audio(ctx, decoder, player, player.seek_to);
+          reseat_audio(ctx, decoder, player.seek_to);
         player.seek_to = -1.0;
       }
 
@@ -318,8 +341,8 @@ private:
         player.position = decoder.hw_clock;
         player.finished = decoder.hw_finished.load(std::memory_order_relaxed);
         item.hw = true;
-        item.clip = player.clip;
-        item.looping = player.looping;
+        item.clip = decoder.source;
+        item.looping = decoder.loop;
         item.pts = decoder.hw_clock;
         item.hw_finished = &decoder.hw_finished;
         channel.items.push_back(std::move(item));
@@ -497,17 +520,17 @@ private:
   }
 
   void start_audio(nxe::ModuleContext &ctx, Decoder &decoder,
-                   const VideoPlayer &player, const f64 start_seconds = 0.0) {
-    if (player.clip.empty() || !ctx.config().audio || !ctx.mixer().valid())
+                   const f64 start_seconds = 0.0) {
+    if (decoder.source.empty() || !ctx.config().audio || !ctx.mixer().valid())
       return;
-    nxe::audio::DecoderPtr codec = open_webm_audio(player.clip);
+    nxe::audio::DecoderPtr codec = open_webm_audio(decoder.source);
     if (!codec)
       return;
     if (start_seconds > 0.0 && codec->format().sample_rate != 0)
       (void)codec->seek(
           nx::cast<u64>(start_seconds * codec->format().sample_rate));
     auto stream = nx::make_unique<nxe::audio::AudioStream>();
-    if (!stream->open(std::move(codec), 1.f, player.looping))
+    if (!stream->open(std::move(codec), 1.f, decoder.loop))
       return;
     stream->pump(); // prime the ring before the voice starts
     decoder.audio = std::move(stream);
@@ -521,13 +544,13 @@ private:
   // the graveyard, where its voice may still be draining it, and start a fresh
   // one seeked there. Each stream owns its ring, so the two never share one.
   void reseat_audio(nxe::ModuleContext &ctx, Decoder &decoder,
-                    const VideoPlayer &player, const f64 seek_seconds) {
+                    const f64 seek_seconds) {
     if (ctx.mixer().valid())
       ctx.mixer().stop(decoder.voice);
     m_dying_streams.push_back({std::move(decoder.audio), decoder.voice});
     decoder.voice = {};
     decoder.audio_started = false;
-    start_audio(ctx, decoder, player, seek_seconds);
+    start_audio(ctx, decoder, seek_seconds);
   }
 
   // Dead entities with a playing voice cannot be freed yet: the audio thread may
