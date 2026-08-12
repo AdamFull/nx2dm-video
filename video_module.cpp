@@ -7,6 +7,7 @@
 #include "video/video_audio.h"
 #include "video/video_component.h"
 #include "video/video_decode.h"
+#include "video/video_hw.h"
 #include "video/video_pass.h"
 #include "video/video_place.h"
 #include "video/video_scripting.h"
@@ -54,6 +55,11 @@ struct VideoItem {
   f32 half_h = 1.f;
   f64 pts = 0.0;
   VideoFrame frame;
+  // The hardware path carries no CPU frame: the render side decodes it, and
+  // needs the clip to open its decoder and the show-time (pts) to pace it.
+  bool hw = false;
+  bool looping = false;
+  nx::string clip;
 };
 
 struct VideoChannel {
@@ -79,6 +85,11 @@ struct Decoder {
   bool audio_started = false;
   bool paused = false;
   bool touched = false;
+  // Hardware clips decode render-side, so the simulation only keeps the clock:
+  // it hands the render thread a show-time, never a frame.
+  bool initialized = false;
+  bool hw = false;
+  f64 hw_clock = 0.0;
 };
 
 /// A stream a seek replaced, kept alive until its old voice has drained it - the
@@ -98,6 +109,16 @@ struct Planes {
   u32 width = 0;
   u32 height = 0;
   f64 uploaded_pts = -1.0;
+  bool touched = false;
+};
+
+/// A clip's hardware decoder. Render-thread only: it owns the device video
+/// decoder, so it cannot live sim-side like the CPU path's Decoder does.
+struct HwClip {
+  nxe::scene::Entity owner{};
+  HwVideoSource source;
+  bool opened = false;
+  bool failed = false;
   bool touched = false;
 };
 
@@ -172,6 +193,9 @@ public:
     for (Planes &p : m_planes)
       destroy_planes(ctx.device(), p);
     m_planes.clear();
+    // The hardware clips own device video decoders; drop them while the device
+    // is still up (each decoder waits the GPU idle as it tears down).
+    m_hw_clips.clear();
     m_renderer.shutdown(ctx.device());
   }
 
@@ -220,22 +244,28 @@ private:
       const Active &a = active[(m_decode_cursor + k) % count];
       VideoPlayer &player = *a.player;
       Decoder &decoder = decoder_for(a.entity);
-      if (!decoder.playback.valid()) {
-        SourcePtr source;
-        if (!player.clip.empty())
-          source = open_webm(player.clip);
-        // No clip, or the file would not open: the synthetic pattern keeps the
-        // pipeline exercised rather than drawing nothing.
-        if (!source)
-          source = std::make_unique<SyntheticSource>(SYNTH_WIDTH, SYNTH_HEIGHT,
-                                                     SYNTH_FPS);
-        decoder.playback.reset(std::move(source), player.looping);
+      if (!decoder.initialized) {
+        decoder.initialized = true;
+        decoder.hw = !player.clip.empty() && is_webm(player.clip) &&
+                     hw_decode_available(ctx.device());
+        if (!decoder.hw) {
+          SourcePtr source;
+          if (!player.clip.empty())
+            source = open_webm(player.clip);
+          if (!source)
+            source = std::make_unique<SyntheticSource>(SYNTH_WIDTH, SYNTH_HEIGHT,
+                                                       SYNTH_FPS);
+          decoder.playback.reset(std::move(source), player.looping);
+        }
         if (m_audio_enabled)
           start_audio(ctx, decoder, player);
       }
 
       if (player.seek_to >= 0.0) {
-        (void)decoder.playback.seek(player.seek_to);
+        if (decoder.hw)
+          decoder.hw_clock = player.seek_to;
+        else
+          (void)decoder.playback.seek(player.seek_to);
         if (decoder.audio_started)
           reseat_audio(ctx, decoder, player, player.seek_to);
         player.seek_to = -1.0;
@@ -257,11 +287,6 @@ private:
         }
         step = advance_clock(ctx, decoder, dt);
       }
-      const VideoFrame *const frame = decoder.playback.advance(step, budget);
-      player.finished = decoder.playback.finished();
-      if (frame == nullptr)
-        continue;
-      player.position = frame->pts;
 
       VideoItem item;
       item.owner = a.entity;
@@ -274,6 +299,25 @@ private:
         item.rect = player.fullscreen ? glm::vec4{-1.f, -1.f, 1.f, 1.f}
                                       : player.rect;
       }
+
+      if (decoder.hw) {
+        // No decode here - the render side does it. Just carry the clock forward
+        // and hand over the show-time.
+        decoder.hw_clock += step;
+        player.position = decoder.hw_clock;
+        item.hw = true;
+        item.clip = player.clip;
+        item.looping = player.looping;
+        item.pts = decoder.hw_clock;
+        channel.items.push_back(std::move(item));
+        continue;
+      }
+
+      const VideoFrame *const frame = decoder.playback.advance(step, budget);
+      player.finished = decoder.playback.finished();
+      if (frame == nullptr)
+        continue;
+      player.position = frame->pts;
       item.pts = frame->pts;
       item.frame = *frame; // copied into the per-frame packet, race-free
       channel.items.push_back(std::move(item));
@@ -313,6 +357,8 @@ private:
     nxe::rhi::Device &device = ctx.device();
     for (Planes &p : m_planes)
       p.touched = false;
+    for (nx::unique_ptr<HwClip> &c : m_hw_clips)
+      c->touched = false;
 
     const f32 aspect = context.extent.height != 0
                            ? nx::cast<f32>(context.extent.width) /
@@ -322,6 +368,34 @@ private:
     nx::vector<VideoDraw> draws;
     draws.reserve(channel->items.size());
     for (const VideoItem &item : channel->items) {
+      const glm::vec4 rect =
+          item.world_space
+              ? world_box_to_ndc(item.rect, item.eye, item.half_h, aspect)
+              : item.rect;
+
+      if (item.hw) {
+        HwClip &clip = hw_clip_for(item.owner);
+        if (!clip.opened) {
+          clip.opened = true;
+          clip.failed = !clip.source.open(device, item.clip);
+        }
+        if (clip.failed)
+          continue;
+        glm::vec2 uv{1.f, 1.f};
+        const nxe::rhi::TextureHandle tex =
+            clip.source.frame_at(item.pts, item.looping, uv);
+        if (!tex.valid())
+          continue;
+        VideoDraw draw;
+        draw.rect = rect;
+        draw.y_plane = device.texture_index(tex);
+        draw.sampler_index = m_sampler;
+        draw.uv_scale = uv;
+        draw.rgba = true;
+        draws.push_back(draw);
+        continue;
+      }
+
       Planes &planes = planes_for(device, item.owner, item.frame);
       if (!planes.y.valid())
         continue;
@@ -333,10 +407,7 @@ private:
       }
 
       VideoDraw draw;
-      draw.rect = item.world_space
-                      ? world_box_to_ndc(item.rect, item.eye, item.half_h,
-                                         aspect)
-                      : item.rect;
+      draw.rect = rect;
       draw.y_plane = device.texture_index(planes.y);
       draw.cb_plane = device.texture_index(planes.cb);
       draw.cr_plane = device.texture_index(planes.cr);
@@ -345,6 +416,7 @@ private:
     }
 
     reap_planes(device);
+    reap_hw_clips();
 
     const nxe::rhi::Format format =
         ctx.config().scene_format == nxe::rhi::Format::Unknown
@@ -383,6 +455,32 @@ private:
     found->touched = true;
     ensure_planes(device, *found, frame);
     return *found;
+  }
+
+  [[nodiscard]] HwClip &hw_clip_for(const nxe::scene::Entity entity) {
+    for (nx::unique_ptr<HwClip> &c : m_hw_clips)
+      if (c->owner == entity) {
+        c->touched = true;
+        return *c;
+      }
+    m_hw_clips.push_back(nx::make_unique<HwClip>());
+    m_hw_clips.back()->owner = entity;
+    m_hw_clips.back()->touched = true;
+    return *m_hw_clips.back();
+  }
+
+  void reap_hw_clips() {
+    for (usize i = m_hw_clips.size(); i-- > 0;)
+      if (!m_hw_clips[i]->touched) {
+        if (i != m_hw_clips.size() - 1)
+          m_hw_clips[i] = std::move(m_hw_clips.back());
+        m_hw_clips.pop_back();
+      }
+  }
+
+  [[nodiscard]] static bool is_webm(const nx::string_view path) {
+    return path.size() >= 5 &&
+           path.substr(path.size() - 5) == nx::string_view(".webm");
   }
 
   void start_audio(nxe::ModuleContext &ctx, Decoder &decoder,
@@ -545,6 +643,7 @@ private:
   // Streams a seek replaced, kept until their old voices drain.
   nx::vector<DyingStream> m_dying_streams;
   nx::vector<Planes> m_planes;
+  nx::vector<nx::unique_ptr<HwClip>> m_hw_clips;
   u32 m_sampler = 0;
   /// Frames decoded per present tick across all clips; 0 means no cap. Rotated
   /// over by m_decode_cursor so the budget reaches every clip in turn.
