@@ -42,9 +42,20 @@ VertexOutput vs_main(uint vertex_id: SV_VertexID) {
 }
 
 [shader("fragment")]
-float4 fs_main_rgba(VertexOutput input): SV_Target {
-    return float4(sample_texture(pc.y_plane, pc.sampler_index,
-                                 input.uv * pc.uv_scale).rgb, 1.0);
+float4 fs_main_nv12(VertexOutput input): SV_Target {
+    const float2 uv = input.uv * pc.uv_scale;
+    const float  y  = sample_texture(pc.y_plane,  pc.sampler_index, uv).r;
+    const float2 c  = sample_texture(pc.cb_plane, pc.sampler_index, uv).rg;
+
+    const float yl = (y   - 16.0 / 255.0) * (255.0 / 219.0);
+    const float b  = (c.r - 128.0 / 255.0) * (255.0 / 224.0);
+    const float r  = (c.g - 128.0 / 255.0) * (255.0 / 224.0);
+
+    float3 rgb;
+    rgb.r = yl + 1.5748 * r;
+    rgb.g = yl - 0.1873 * b - 0.4681 * r;
+    rgb.b = yl + 1.8556 * b;
+    return float4(saturate(rgb), 1.0);
 }
 
 [shader("fragment")]

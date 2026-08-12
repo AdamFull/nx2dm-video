@@ -381,17 +381,16 @@ private:
         }
         if (clip.failed)
           continue;
-        glm::vec2 uv{1.f, 1.f};
-        const nxe::rhi::TextureHandle tex =
-            clip.source.frame_at(item.pts, item.looping, uv);
-        if (!tex.valid())
+        const HwFrame frame = clip.source.frame_at(item.pts, item.looping);
+        if (!frame.valid())
           continue;
         VideoDraw draw;
         draw.rect = rect;
-        draw.y_plane = device.texture_index(tex);
+        draw.y_plane = device.texture_index(frame.luma);
+        draw.cb_plane = device.texture_index(frame.chroma);
         draw.sampler_index = m_sampler;
-        draw.uv_scale = uv;
-        draw.rgba = true;
+        draw.uv_scale = frame.uv_scale;
+        draw.hw = true;
         draws.push_back(draw);
         continue;
       }

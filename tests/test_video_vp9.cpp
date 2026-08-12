@@ -429,7 +429,7 @@ TEST_CASE("vp9 present: the sampleable copy holds the decoded picture") {
   CHECK(slot_mismatches == 0u);
 }
 
-TEST_CASE("vp9 convert: the ycbcr sampler yields the right RGB") {
+TEST_CASE("vp9 planes: the resolved luma and chroma match libvpx") {
   TestDevice fixture;
   if (!fixture.ready)
     SKIP("no usable RHI device");
@@ -445,23 +445,41 @@ TEST_CASE("vp9 convert: the ycbcr sampler yields the right RGB") {
   nxe::rhi::VideoDecoder decoder;
   REQUIRE(decoder.init(fixture.device, nxe::rhi::VideoCodec::VP9, 320, 240));
 
-  nxe::rhi::DecodedPicture pic;
-  REQUIRE(decoder.decode(frames[0].bytes.data(),
-                         static_cast<u32>(frames[0].bytes.size()), pic));
-  REQUIRE(decoder.convert(pic.slot));
+  bool shown = false;
+  u32 w = 0;
+  u32 h = 0;
+  REQUIRE(decoder.decode_frame(frames[0].bytes.data(),
+                               static_cast<u32>(frames[0].bytes.size()), shown,
+                               w, h));
+  REQUIRE(w == 320u);
+  REQUIRE(h == 240u);
+  // Resolve the decoded picture into the two sampled plane textures.
+  REQUIRE(decoder.show_last());
 
-  nx::vector<u8> rgba;
-  REQUIRE(decoder.read_rgba(pic.width, pic.height, rgba));
-  REQUIRE(rgba.size() == 320u * 240u * 4u);
+  const u32 coded = decoder.coded_extent().width;
+  const nxe::rhi::ReadbackResult luma =
+      fixture.device.uploader().read_texture(decoder.luma_texture());
+  const nxe::rhi::ReadbackResult chroma =
+      fixture.device.uploader().read_texture(decoder.chroma_texture());
+  REQUIRE(luma.data != nullptr);
+  REQUIRE(chroma.data != nullptr);
+  fixture.device.uploader().wait(luma.ticket);
+  fixture.device.uploader().wait(chroma.ticket);
 
-  // The oracle: libvpx's I420, converted to RGB by the same BT.709 narrow-range
-  // math the hardware sampler runs, with nearest chroma to match. Exactness is
-  // not the claim - a wrong colour matrix or range moves every pixel far past
-  // this tolerance - but rounding and chroma siting keep it within a few LSB.
-  const int w = static_cast<int>(pic.width);
-  const int h = static_cast<int>(pic.height);
-  const int cw = w / 2;
+  const VpxLuma ref = vpx_decode_luma(frames, 0); // libvpx luma
+  REQUIRE(ref.ok);
 
+  // Luma: the resolved plane is bit-exact with libvpx over the visible region
+  // (the texture row pitch is the coded width).
+  usize luma_mismatch = 0;
+  for (u32 y = 0; y < h; ++y)
+    for (u32 x = 0; x < w; ++x)
+      if (luma.data[y * coded + x] != ref.y[y * w + x])
+        ++luma_mismatch;
+  CHECK(luma_mismatch == 0u);
+
+  // Chroma: interleaved (Cb in .r, Cr in .g), half resolution, against libvpx's
+  // separate U/V planes.
   vpx_codec_ctx_t codec{};
   REQUIRE(vpx_codec_dec_init(&codec, vpx_codec_vp9_dx(), nullptr, 0) ==
           VPX_CODEC_OK);
@@ -472,47 +490,20 @@ TEST_CASE("vp9 convert: the ycbcr sampler yields the right RGB") {
   const vpx_image_t *img = vpx_codec_get_frame(&codec, &it);
   REQUIRE(img != nullptr);
 
-  const auto clamp8 = [](const float v) {
-    return static_cast<int>(v < 0.f ? 0.f : (v > 255.f ? 255.f : v));
-  };
-
-  double error_sum = 0.0;
-  int big = 0; // pixels a sharp chroma edge flips under nearest siting
-  bool all_opaque = true;
-  for (int y = 0; y < h; ++y)
-    for (int x = 0; x < w; ++x) {
-      const int Y = img->planes[VPX_PLANE_Y][y * img->stride[VPX_PLANE_Y] + x];
-      const int U =
-          img->planes[VPX_PLANE_U][(y / 2) * img->stride[VPX_PLANE_U] + x / 2];
-      const int V =
-          img->planes[VPX_PLANE_V][(y / 2) * img->stride[VPX_PLANE_V] + x / 2];
-      const float yf = (Y - 16) / 219.0f;
-      const float cb = (U - 128) / 224.0f;
-      const float cr = (V - 128) / 224.0f;
-      const int r = clamp8((yf + 1.5748f * cr) * 255.0f);
-      const int g = clamp8((yf - 0.1873f * cb - 0.4681f * cr) * 255.0f);
-      const int b = clamp8((yf + 1.8556f * cb) * 255.0f);
-      const usize p = (static_cast<usize>(y) * w + x) * 4;
-      const int dr = std::abs(rgba[p + 0] - r);
-      const int dg = std::abs(rgba[p + 1] - g);
-      const int db = std::abs(rgba[p + 2] - b);
-      error_sum += dr + dg + db;
-      if (nx::max(dr, nx::max(dg, db)) > 30)
-        ++big;
-      if (rgba[p + 3] != 255u)
-        all_opaque = false;
+  const u32 cw = w / 2;
+  const u32 ch = h / 2;
+  const u32 c_pitch = coded / 2; // texels per row in the RG8 texture
+  usize chroma_mismatch = 0;
+  for (u32 y = 0; y < ch; ++y)
+    for (u32 x = 0; x < cw; ++x) {
+      const u8 cb = chroma.data[(y * c_pitch + x) * 2 + 0];
+      const u8 cr = chroma.data[(y * c_pitch + x) * 2 + 1];
+      if (cb != img->planes[VPX_PLANE_U][y * img->stride[VPX_PLANE_U] + x] ||
+          cr != img->planes[VPX_PLANE_V][y * img->stride[VPX_PLANE_V] + x])
+        ++chroma_mismatch;
     }
   vpx_codec_destroy(&codec);
-
-  CHECK(all_opaque);
-  // A right matrix and range put the average within a fraction of an LSB. A
-  // wrong one moves every pixel and this explodes; nearest chroma still leaves a
-  // handful of edge pixels flipped, so the mean - not any single pixel - is the
-  // measure. Guard the flip count too: a real error (swapped planes, wrong
-  // range) both raises the mean and paints far more than a fringe.
-  const double mean_error = error_sum / (static_cast<double>(w) * h * 3);
-  CHECK(mean_error < 2.0);
-  CHECK(big * 100 < w * h); // fewer than 1% of pixels flipped by siting
+  CHECK(chroma_mismatch == 0u);
 }
 
 TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
@@ -535,17 +526,17 @@ TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
   CHECK(src.height() == 240u);
   CHECK(src.frame_rate() > 0.0);
 
-  // The opening frame comes out as a real texture, at the top of the clip.
-  glm::vec2 uv{0.f, 0.f};
-  const nxe::rhi::TextureHandle first = src.frame_at(0.0, false, uv);
+  // The opening frame comes out as real luma/chroma textures, at the top of the
+  // clip.
+  const nxm::video::HwFrame first = src.frame_at(0.0, false);
   REQUIRE(first.valid());
   CHECK(src.position() < 0.2);
-  CHECK(uv.x > 0.9f); // 320 is the coded width here, so no cropping
-  CHECK(uv.y > 0.9f);
+  CHECK(first.uv_scale.x > 0.9f); // 320 is the coded width here, so no cropping
+  CHECK(first.uv_scale.y > 0.9f);
 
   // Pacing to a second in lands on a later frame - the clock moved and the
   // decoder chased it forward through the reference chain.
-  const nxe::rhi::TextureHandle later = src.frame_at(1.0, false, uv);
+  const nxm::video::HwFrame later = src.frame_at(1.0, false);
   REQUIRE(later.valid());
   CHECK(src.position() > 0.8);
   CHECK(src.position() < 1.2);
@@ -553,9 +544,9 @@ TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
 
   // Past the end, a non-looping clip finishes and holds its last frame.
   for (int i = 0; i < 5; ++i)
-    (void)src.frame_at(100.0, false, uv);
+    (void)src.frame_at(100.0, false);
   CHECK(src.finished());
-  CHECK(src.frame_at(100.0, false, uv).valid());
+  CHECK(src.frame_at(100.0, false).valid());
 }
 
 TEST_CASE("vp9 parse: a truncated or empty frame is rejected, not walked off") {

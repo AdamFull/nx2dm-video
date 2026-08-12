@@ -148,8 +148,7 @@ struct HwVideoSource::Impl {
   f64 next_pts = 0.0;
   bool have_next = false;
   f64 current_pts = -1.0;
-  rhi::TextureHandle texture;
-  glm::vec2 uv_scale{1.f, 1.f};
+  HwFrame frame;
   bool valid = false;
   bool finished = false;
 
@@ -198,9 +197,7 @@ f64 HwVideoSource::frame_rate() const noexcept { return m->demux.frame_rate(); }
 f64 HwVideoSource::position() const noexcept { return m->current_pts; }
 bool HwVideoSource::finished() const noexcept { return m->finished; }
 
-rhi::TextureHandle HwVideoSource::frame_at(const f64 target_seconds,
-                                           const bool looping,
-                                           glm::vec2 &uv_scale) {
+HwFrame HwVideoSource::frame_at(const f64 target_seconds, const bool looping) {
   bool advanced = false;
   u32 shown_w = 0;
   u32 shown_h = 0;
@@ -225,21 +222,15 @@ rhi::TextureHandle HwVideoSource::frame_at(const f64 target_seconds,
       m->finished = true;
   }
 
-  if (advanced) {
-    // Only the shown frame is resolved to RGBA; the ones in between were decoded
-    // for their references alone.
-    const rhi::TextureHandle tex = m->decoder.convert_last();
-    if (tex.valid()) {
-      m->texture = tex;
-      const rhi::Extent2D coded = m->decoder.coded_extent();
-      m->uv_scale = {coded.width != 0 ? nx::cast<f32>(shown_w) / coded.width
-                                      : 1.f,
-                     coded.height != 0 ? nx::cast<f32>(shown_h) / coded.height
-                                       : 1.f};
-    }
+  if (advanced && m->decoder.show_last()) {
+    m->frame.luma = m->decoder.luma_texture();
+    m->frame.chroma = m->decoder.chroma_texture();
+    const rhi::Extent2D coded = m->decoder.coded_extent();
+    m->frame.uv_scale = {
+        coded.width != 0 ? nx::cast<f32>(shown_w) / coded.width : 1.f,
+        coded.height != 0 ? nx::cast<f32>(shown_h) / coded.height : 1.f};
   }
-  uv_scale = m->uv_scale;
-  return m->texture;
+  return m->frame;
 }
 
 #else // no hardware video decode on this backend
@@ -256,10 +247,7 @@ u32 HwVideoSource::height() const noexcept { return 0; }
 f64 HwVideoSource::frame_rate() const noexcept { return 0.0; }
 f64 HwVideoSource::position() const noexcept { return 0.0; }
 bool HwVideoSource::finished() const noexcept { return true; }
-nxe::rhi::TextureHandle HwVideoSource::frame_at(f64, bool, glm::vec2 &uv_scale) {
-  uv_scale = {1.f, 1.f};
-  return {};
-}
+HwFrame HwVideoSource::frame_at(f64, bool) { return {}; }
 
 #endif
 

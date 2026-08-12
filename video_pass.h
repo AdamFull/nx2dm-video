@@ -36,7 +36,7 @@ struct VideoDraw {
   u32 cr_plane = 0;
   u32 sampler_index = 0;
   glm::vec2 uv_scale{1.f, 1.f};
-  bool rgba = false;
+  bool hw = false;
 };
 
 class VideoRenderer {
@@ -60,8 +60,8 @@ private:
                                      nxe::rhi::Format format);
 
   nxe::rhi::ShaderHandle m_shader;
-  nxe::rhi::PipelineHandle m_pipeline;      ///< planar YCbCr (fs_main)
-  nxe::rhi::PipelineHandle m_pipeline_rgba; ///< hardware RGBA (fs_main_rgba)
+  nxe::rhi::PipelineHandle m_pipeline;      ///< three CPU planes (fs_main)
+  nxe::rhi::PipelineHandle m_pipeline_hw;   ///< hardware NV12 (fs_main_nv12)
   nxe::rhi::Format m_format = nxe::rhi::Format::Unknown;
 };
 

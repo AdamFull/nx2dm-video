@@ -166,40 +166,42 @@ struct Rendered {
   return out;
 }
 
-[[nodiscard]] rhi::TextureHandle make_rgba(rhi::Device &device,
-                                           const std::vector<u8> &rgba,
-                                           const nx::string_view name) {
+// A two-component (RG8) texture, for the interleaved NV12 chroma plane.
+[[nodiscard]] rhi::TextureHandle make_rg8(rhi::Device &device, const u32 width,
+                                          const u32 height,
+                                          const std::vector<u8> &data,
+                                          const nx::string_view name) {
   const rhi::TextureHandle tex = device.create_texture({
       .name = name,
-      .format = rhi::Format::RGBA8_UNORM,
-      .width = TARGET,
-      .height = TARGET,
+      .format = rhi::Format::RG8_UNORM,
+      .width = width,
+      .height = height,
       .usage = rhi::TextureUsage::Sampled | rhi::TextureUsage::CopyDst,
   });
   if (!tex.valid())
     return {};
   rhi::ImageSubresource sub{};
-  sub.size = nx::cast<u64>(rgba.size());
-  sub.width = TARGET;
-  sub.height = TARGET;
+  sub.size = nx::cast<u64>(data.size());
+  sub.width = width;
+  sub.height = height;
   sub.depth = 1;
-  sub.row_pitch = TARGET * 4;
+  sub.row_pitch = width * 2;
   const rhi::ImageSubresource layout[1] = {sub};
   (void)device.uploader().upload_texture(
-      tex, std::span<const u8>(rgba.data(), rgba.size()),
+      tex, std::span<const u8>(data.data(), data.size()),
       std::span<const rhi::ImageSubresource>(layout, 1));
   return tex;
 }
 
-// Draws one full-screen quad from a single RGBA texture through fs_main_rgba.
-[[nodiscard]] Rendered draw_rgba(rhi::Device &device, rhi::ShaderHandle shader,
-                                 rhi::TextureHandle source,
+[[nodiscard]] Rendered draw_nv12(rhi::Device &device, rhi::ShaderHandle shader,
+                                 rhi::TextureHandle luma,
+                                 rhi::TextureHandle chroma,
                                  rhi::TextureHandle target,
                                  rhi::SamplerHandle sampler) {
   const rhi::PipelineHandle pipeline = device.create_graphics_pipeline({
-      .name = "video.rgba",
+      .name = "video.nv12",
       .vertex = {.shader = shader, .entry_point = "vs_main"},
-      .fragment = {.shader = shader, .entry_point = "fs_main_rgba"},
+      .fragment = {.shader = shader, .entry_point = "fs_main_nv12"},
       .color_formats = {rhi::Format::RGBA8_UNORM},
       .color_count = 1,
   });
@@ -207,7 +209,8 @@ struct Rendered {
     return {};
 
   VideoPush push;
-  push.y_plane = device.texture_index(source);
+  push.y_plane = device.texture_index(luma);
+  push.cb_plane = device.texture_index(chroma);
   push.sampler_index = device.sampler_index(sampler);
 
   rhi::CommandContext cmd;
@@ -219,7 +222,7 @@ struct Rendered {
                                   .from = rhi::ResourceState::Undefined,
                                   .to = rhi::ResourceState::ColorAttachment});
   rhi::RenderPassDesc pass = {};
-  pass.name = "video.rgba";
+  pass.name = "video.nv12";
   pass.color[0].texture = target;
   pass.color[0].load = rhi::LoadOp::Clear;
   pass.color[0].store = rhi::StoreOp::Store;
@@ -315,7 +318,7 @@ TEST_CASE("video shader: a grey frame converts to grey (BT.709)") {
   device.destroy_shader(shader);
 }
 
-TEST_CASE("video shader: the RGBA path draws the frame, right way up") {
+TEST_CASE("video shader: the NV12 path converts and lands right way up") {
   TestDevice fixture;
   if (!fixture.ready)
     SKIP("no usable RHI device");
@@ -325,21 +328,20 @@ TEST_CASE("video shader: the RGBA path draws the frame, right way up") {
   if (!shader.valid())
     SKIP("shaders are not built in this configuration");
 
-  // A hardware frame arrives already RGB. Top rows a distinct colour, bottom
-  // rows dark: the colour must pass through untouched and land the right way up.
-  std::vector<u8> rgba(nx::cast<usize>(TARGET) * TARGET * 4, 0u);
-  for (u32 row = 0; row < TARGET; ++row)
-    for (u32 col = 0; col < TARGET; ++col) {
-      const usize p = (nx::cast<usize>(row) * TARGET + col) * 4;
-      const bool top = row < TARGET / 2;
-      rgba[p + 0] = top ? 200u : 20u;
-      rgba[p + 1] = top ? 120u : 20u;
-      rgba[p + 2] = top ? 40u : 20u;
-      rgba[p + 3] = 255u;
-    }
-  const rhi::TextureHandle src = make_rgba(device, rgba, "hw");
+  std::vector<u8> luma(nx::cast<usize>(TARGET) * TARGET, 16u);
+  for (u32 row = 0; row < TARGET / 2; ++row)
+    for (u32 col = 0; col < TARGET; ++col)
+      luma[nx::cast<usize>(row) * TARGET + col] = 235u;
+  std::vector<u8> chroma(nx::cast<usize>(TARGET / 2) * (TARGET / 2) * 2, 128u);
+  for (usize i = 0; i < chroma.size(); i += 2)
+    chroma[i] = 200u; // Cb high -> blue push; Cr stays neutral
+
+  const rhi::TextureHandle yt = make_plane(device, TARGET, TARGET, luma, "y");
+  const rhi::TextureHandle ct =
+      make_rg8(device, TARGET / 2, TARGET / 2, chroma, "cbcr");
   device.uploader().flush();
-  REQUIRE(src.valid());
+  REQUIRE(yt.valid());
+  REQUIRE(ct.valid());
 
   const rhi::SamplerHandle sampler = device.create_sampler({.name = "video"});
   REQUIRE(sampler.valid());
@@ -352,21 +354,21 @@ TEST_CASE("video shader: the RGBA path draws the frame, right way up") {
   });
   REQUIRE(target.valid());
 
-  const Rendered r = draw_rgba(device, shader, src, target, sampler);
+  const Rendered r = draw_nv12(device, shader, yt, ct, target, sampler);
   REQUIRE(r.ok);
 
-  // 1:1 draw with bilinear at texel centres: the colour comes through exact.
-  const usize top = texel(1, TARGET / 2);
-  CHECK(std::abs(int(r.pixels.data[top + 0]) - 200) <= 2);
-  CHECK(std::abs(int(r.pixels.data[top + 1]) - 120) <= 2);
-  CHECK(std::abs(int(r.pixels.data[top + 2]) - 40) <= 2);
-  // Bright, distinct top; dark bottom - upright.
-  CHECK(r.pixels.data[texel(0, TARGET / 2) + 0] > 150u);
-  CHECK(r.pixels.data[texel(TARGET - 1, TARGET / 2) + 0] < 60u);
+  // In the dark-luma bottom, where chroma shows, high Cb pushes blue above red;
+  // a Cb/Cr swap would push red instead.
+  const usize bot = texel(TARGET - 1, TARGET / 2);
+  CHECK(int(r.pixels.data[bot + 2]) > int(r.pixels.data[bot + 0]) + 20);
+  // Green tracks luma (Cb barely touches it): bright top, dark bottom - upright.
+  CHECK(r.pixels.data[texel(0, TARGET / 2) + 1] > 200u);
+  CHECK(r.pixels.data[bot + 1] < 40u);
 
   device.destroy_texture(target);
   device.destroy_sampler(sampler);
-  device.destroy_texture(src);
+  device.destroy_texture(ct);
+  device.destroy_texture(yt);
   device.destroy_shader(shader);
 }
 

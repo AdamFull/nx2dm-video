@@ -21,9 +21,9 @@ void VideoRenderer::shutdown(rhi::Device &device) {
   if (m_pipeline.valid())
     device.destroy_pipeline(m_pipeline);
   m_pipeline = {};
-  if (m_pipeline_rgba.valid())
-    device.destroy_pipeline(m_pipeline_rgba);
-  m_pipeline_rgba = {};
+  if (m_pipeline_hw.valid())
+    device.destroy_pipeline(m_pipeline_hw);
+  m_pipeline_hw = {};
   if (m_shader.valid())
     device.destroy_shader(m_shader);
   m_shader = {};
@@ -39,8 +39,8 @@ bool VideoRenderer::ensure_pipeline(rhi::Device &device,
   // with the swapchain. Rebuilding is rare enough to be simple.
   if (m_pipeline.valid())
     device.destroy_pipeline(m_pipeline);
-  if (m_pipeline_rgba.valid())
-    device.destroy_pipeline(m_pipeline_rgba);
+  if (m_pipeline_hw.valid())
+    device.destroy_pipeline(m_pipeline_hw);
 
   m_pipeline = device.create_graphics_pipeline({
       .name = "video",
@@ -49,14 +49,14 @@ bool VideoRenderer::ensure_pipeline(rhi::Device &device,
       .color_formats = {format},
       .color_count = 1,
   });
-  m_pipeline_rgba = device.create_graphics_pipeline({
-      .name = "video.rgba",
+  m_pipeline_hw = device.create_graphics_pipeline({
+      .name = "video.nv12",
       .vertex = {.shader = m_shader, .entry_point = "vs_main"},
-      .fragment = {.shader = m_shader, .entry_point = "fs_main_rgba"},
+      .fragment = {.shader = m_shader, .entry_point = "fs_main_nv12"},
       .color_formats = {format},
       .color_count = 1,
   });
-  if (!m_pipeline.valid() || !m_pipeline_rgba.valid())
+  if (!m_pipeline.valid() || !m_pipeline_hw.valid())
     return false;
   m_format = format;
   return true;
@@ -78,12 +78,12 @@ void VideoRenderer::draw(rhi::Device &device, rg::RenderGraph &graph,
       rg::SetupFn([target](rg::Builder &builder) { builder.color(0, target); }),
       rg::ExecuteFn([this, local = std::move(local)](
                         rhi::CommandContext &cmd, const rg::Resources &) {
-        bool rgba_bound = false;
+        bool hw_bound = false;
         bool any_bound = false;
         for (const VideoDraw &d : local) {
-          if (!any_bound || d.rgba != rgba_bound) {
-            cmd.bind_pipeline(d.rgba ? m_pipeline_rgba : m_pipeline);
-            rgba_bound = d.rgba;
+          if (!any_bound || d.hw != hw_bound) {
+            cmd.bind_pipeline(d.hw ? m_pipeline_hw : m_pipeline);
+            hw_bound = d.hw;
             any_bound = true;
           }
           VideoPush push;

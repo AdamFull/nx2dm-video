@@ -17,6 +17,15 @@ namespace nxm::video {
 /// Whether the device can hardware-decode the VP9 this module plays.
 [[nodiscard]] bool hw_decode_available(nxe::rhi::Device &device);
 
+struct HwFrame {
+  nxe::rhi::TextureHandle luma;
+  nxe::rhi::TextureHandle chroma;
+  glm::vec2 uv_scale{1.f, 1.f};
+  [[nodiscard]] bool valid() const noexcept {
+    return luma.valid() && chroma.valid();
+  }
+};
+
 class HwVideoSource {
 public:
   HwVideoSource();
@@ -30,8 +39,7 @@ public:
   [[nodiscard]] u32 height() const noexcept;
   [[nodiscard]] f64 frame_rate() const noexcept;
 
-  [[nodiscard]] nxe::rhi::TextureHandle
-  frame_at(f64 target_seconds, bool looping, glm::vec2 &uv_scale);
+  [[nodiscard]] HwFrame frame_at(f64 target_seconds, bool looping);
 
   /// PTS of the frame currently held, in seconds.
   [[nodiscard]] f64 position() const noexcept;
