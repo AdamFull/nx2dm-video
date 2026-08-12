@@ -9,6 +9,7 @@
 #include "video/video_decode.h"
 #include "video/video_pass.h"
 #include "video/video_place.h"
+#include "video/video_scripting.h"
 #include "video/video_source.h"
 
 #include "core/app/engine.h"
@@ -106,6 +107,11 @@ public:
     ctx.scene().formats().add(
         nxe::scene::described<VideoPlayer>("video", "video_players"));
     return true;
+  }
+
+  void on_expose_scripts(nxe::script::Host &host,
+                         nxe::ModuleContext &ctx) override {
+    expose_video_services(host, ctx);
   }
 
   bool on_attach(nxe::ModuleContext &ctx) override {

@@ -1,0 +1,20 @@
+{
+  "services": [
+    {
+      "name": "video_play",
+      "signature": "(number)->(boolean)"
+    },
+    {
+      "name": "video_stop",
+      "signature": "(number)->(boolean)"
+    },
+    {
+      "name": "video_finished",
+      "signature": "(number)->(boolean)"
+    },
+    {
+      "name": "video_looping",
+      "signature": "(number,boolean)->(boolean)"
+    }
+  ]
+}

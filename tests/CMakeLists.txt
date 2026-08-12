@@ -36,3 +36,14 @@ endif ()
 
 set_target_properties(nx_video_tests PROPERTIES FOLDER "tests")
 nxtest_discover_tests(nx_video_tests LABELS video)
+
+# The script surface needs an Engine and the Host, so it is a target of its own
+# rather than pulling nx::engine into the lean decode/shader suite above.
+add_executable(nx_video_scripting_tests
+        test_video_scripting.cpp ../video_scripting.cpp)
+target_include_directories(nx_video_scripting_tests PRIVATE
+        "${CMAKE_SOURCE_DIR}/engine" "${CMAKE_SOURCE_DIR}/modules")
+target_link_libraries(nx_video_scripting_tests
+        PRIVATE nx::test nx::foundation nx::engine nx::glm nx::compile_options)
+set_target_properties(nx_video_scripting_tests PROPERTIES FOLDER "tests")
+nxtest_discover_tests(nx_video_scripting_tests LABELS video)
