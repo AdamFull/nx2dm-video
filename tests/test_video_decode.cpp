@@ -12,6 +12,7 @@
 
 #include "video/video_audio.h"
 #include "video/video_decode.h"
+#include "video/video_demux.h"
 #include "video/video_source.h"
 
 #include "core/foundation/vfs/vfs.h"
@@ -150,6 +151,26 @@ TEST_CASE("video decode: an AV1 webm decodes through the same FrameSource") {
   CHECK(count == 45);
   src->restart();
   CHECK(decode_all(*src) == 45);
+}
+
+TEST_CASE("video demux: re-opens for a second codec id on the same object") {
+  const MountedFixtures fixtures;
+  REQUIRE(fixtures.ok);
+
+  // The MediaCodec source tries VP9 then AV1 on one demux; the second open has
+  // to discard the first attempt's segment and read the track cleanly. Nothing
+  // else re-opens a demux, so this is where that contract is pinned.
+  nxm::video::WebmVideoDemux demux;
+  CHECK_FALSE(demux.open("/test.webm", "V_VP8")); // right file, absent codec
+  REQUIRE(demux.open("/test.webm", "V_VP9"));      // re-open finds the real track
+  CHECK(demux.width() == 320);
+  CHECK(demux.height() == 240);
+
+  const u8 *data = nullptr;
+  long len = 0;
+  f64 pts = 0.0;
+  REQUIRE(demux.next(data, len, pts)); // and yields real packets after re-open
+  CHECK(len > 0);
 }
 
 TEST_CASE("video decode: every frame of the clip comes out, twice") {

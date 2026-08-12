@@ -8,6 +8,7 @@
 #include "video/video_component.h"
 #include "video/video_decode.h"
 #include "video/video_hw.h"
+#include "video/video_mediacodec.h"
 #include "video/video_pass.h"
 #include "video/video_place.h"
 #include "video/video_scripting.h"
@@ -254,8 +255,13 @@ private:
                      webm_is_vp9(player.clip);
         if (!decoder.hw) {
           SourcePtr source;
-          if (!player.clip.empty())
-            source = open_webm(player.clip);
+          if (!player.clip.empty()) {
+            // Android's hardware block, when it can read this clip; nullptr on
+            // every other platform, so the CPU decoder takes over below.
+            source = open_media_codec(player.clip);
+            if (!source)
+              source = open_webm(player.clip);
+          }
           if (!source)
             source = std::make_unique<SyntheticSource>(SYNTH_WIDTH, SYNTH_HEIGHT,
                                                        SYNTH_FPS);

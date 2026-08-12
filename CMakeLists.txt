@@ -16,9 +16,16 @@ nx_add_video_codecs()
 nx_module(video
         DISPLAY "WebM video playback"
         SOURCES video_module.cpp video_source.cpp video_pass.cpp video_decode.cpp
-                video_audio.cpp video_scripting.cpp video_hw.cpp
+                video_demux.cpp video_mediacodec.cpp video_audio.cpp
+                video_scripting.cpp video_hw.cpp
         DEPENDS nx::vpx nx::webm nx::opus nx::vorbis nx::gav1
         ASSETS assets)
+
+if (ANDROID)
+    # The hardware decode path: NDK MediaCodec (mediandk) into I420, drawn by the
+    # same FrameSource as the CPU decoder. log for diagnostics.
+    target_link_libraries(nx_module_video PUBLIC mediandk log)
+endif ()
 
 if (NX_BUILD_TESTS)
     add_subdirectory(tests)

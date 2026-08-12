@@ -10,184 +10,18 @@ namespace nxm::video {
 
 #include "core/rendering/rhi/vulkan/vk_video.h"
 
-#include "core/foundation/containers/blob.h"
-#include "core/foundation/vfs/vfs.h"
-
-#include "mkvparser/mkvparser.h"
-
-#include <cstring>
+#include "video/video_demux.h"
 
 namespace nxm::video {
 namespace {
 
 namespace rhi = nxe::rhi;
 
-class MemoryReader final : public mkvparser::IMkvReader {
-public:
-  MemoryReader(const u8 *data, long long size) noexcept
-      : m_data(data), m_size(size) {}
-  int Read(long long pos, long len, unsigned char *buf) override {
-    if (pos < 0 || len < 0 || pos + len > m_size)
-      return -1;
-    std::memcpy(buf, m_data + pos, static_cast<size_t>(len));
-    return 0;
-  }
-  int Length(long long *total, long long *available) override {
-    if (total != nullptr)
-      *total = m_size;
-    if (available != nullptr)
-      *available = m_size;
-    return 0;
-  }
-
-private:
-  const u8 *m_data;
-  long long m_size;
-};
-
-/// Yields the compressed VP9 packets of a .webm in order - the bytes a hardware
-/// decoder is fed, with their presentation time. No libvpx: demux only.
-class WebmDemux {
-public:
-  ~WebmDemux() { delete m_segment; }
-
-  [[nodiscard]] bool open(const nx::string_view path) {
-    auto bytes = nx::vfs::read(nx::vfs::path_view(path));
-    if (!bytes)
-      return false;
-    m_bytes = std::move(*bytes);
-    m_reader = MemoryReader(m_bytes.data(), nx::cast<long long>(m_bytes.size()));
-
-    long long pos = 0;
-    if (mkvparser::EBMLHeader{}.Parse(&m_reader, pos) < 0)
-      return false;
-    if (mkvparser::Segment::CreateInstance(&m_reader, pos, m_segment) < 0 ||
-        m_segment == nullptr || m_segment->Load() < 0)
-      return false;
-
-    const mkvparser::Tracks *const tracks = m_segment->GetTracks();
-    const mkvparser::VideoTrack *video = nullptr;
-    for (unsigned long i = 0; tracks != nullptr && i < tracks->GetTracksCount();
-         ++i) {
-      const mkvparser::Track *const t = tracks->GetTrackByIndex(i);
-      if (t != nullptr && t->GetType() == mkvparser::Track::kVideo &&
-          t->GetCodecId() != nullptr &&
-          std::strcmp(t->GetCodecId(), "V_VP9") == 0) {
-        video = static_cast<const mkvparser::VideoTrack *>(t);
-        break;
-      }
-    }
-    if (video == nullptr)
-      return false;
-    m_track = video->GetNumber();
-    m_width = nx::cast<u32>(video->GetWidth());
-    m_height = nx::cast<u32>(video->GetHeight());
-    m_fps = video->GetFrameRate() > 0.0 ? video->GetFrameRate() : 30.0;
-    restart();
-    return true;
-  }
-
-  [[nodiscard]] u32 width() const noexcept { return m_width; }
-  [[nodiscard]] u32 height() const noexcept { return m_height; }
-  [[nodiscard]] f64 frame_rate() const noexcept { return m_fps; }
-
-  void restart() {
-    m_cluster = m_segment != nullptr ? m_segment->GetFirst() : nullptr;
-    m_entry = nullptr;
-    m_at_entry = false;
-  }
-
-  [[nodiscard]] bool seek_to_keyframe(const f64 target) {
-    if (m_segment == nullptr)
-      return false;
-    const long long target_ns =
-        nx::cast<long long>(nx::max(target, 0.0) * 1e9);
-    const mkvparser::Cluster *key_cluster = nullptr;
-    const mkvparser::BlockEntry *key_entry = nullptr;
-    bool passed = false;
-    for (const mkvparser::Cluster *cluster = m_segment->GetFirst();
-         cluster != nullptr && !cluster->EOS() && !passed;
-         cluster = m_segment->GetNext(cluster)) {
-      const mkvparser::BlockEntry *entry = nullptr;
-      long status = cluster->GetFirst(entry);
-      while (status >= 0 && entry != nullptr && !entry->EOS()) {
-        const mkvparser::Block *const block = entry->GetBlock();
-        if (block != nullptr && block->GetTrackNumber() == m_track) {
-          if (block->GetTime(cluster) > target_ns) {
-            passed = true;
-            break;
-          }
-          if (block->IsKey()) {
-            key_cluster = cluster;
-            key_entry = entry;
-          }
-        }
-        const mkvparser::BlockEntry *n = nullptr;
-        status = cluster->GetNext(entry, n);
-        entry = n;
-      }
-    }
-    if (key_entry == nullptr) { // before the first keyframe: the start is it
-      restart();
-      return true;
-    }
-    m_cluster = key_cluster;
-    m_entry = key_entry;
-    m_at_entry = true; // next() decodes this block, not the one after
-    return true;
-  }
-
-  [[nodiscard]] bool next(nx::vector<u8> &out, f64 &pts) {
-    while (m_cluster != nullptr && !m_cluster->EOS()) {
-      long status = 0;
-      if (m_at_entry) {
-        m_at_entry = false; // a seek left m_entry on the block to decode
-      } else if (m_entry == nullptr) {
-        status = m_cluster->GetFirst(m_entry);
-      } else {
-        const mkvparser::BlockEntry *n = nullptr;
-        status = m_cluster->GetNext(m_entry, n);
-        m_entry = n;
-      }
-      if (status < 0 || m_entry == nullptr || m_entry->EOS()) {
-        m_cluster = m_segment->GetNext(m_cluster);
-        m_entry = nullptr;
-        continue;
-      }
-      const mkvparser::Block *const block = m_entry->GetBlock();
-      if (block == nullptr || block->GetTrackNumber() != m_track ||
-          block->GetFrameCount() <= 0)
-        continue;
-      const mkvparser::Block::Frame &f = block->GetFrame(0);
-      if (f.len <= 0)
-        continue;
-      out.resize(nx::cast<usize>(f.len));
-      if (f.Read(&m_reader, out.data()) < 0)
-        continue;
-      pts = nx::cast<f64>(block->GetTime(m_cluster)) / 1e9;
-      return true;
-    }
-    return false;
-  }
-
-private:
-  nx::blob<u8> m_bytes;
-  MemoryReader m_reader{nullptr, 0};
-  mkvparser::Segment *m_segment = nullptr;
-  const mkvparser::Cluster *m_cluster = nullptr;
-  const mkvparser::BlockEntry *m_entry = nullptr;
-  bool m_at_entry = false;
-  long long m_track = 0;
-  u32 m_width = 0;
-  u32 m_height = 0;
-  f64 m_fps = 30.0;
-};
-
 } // namespace
 
 struct HwVideoSource::Impl {
   rhi::VideoDecoder decoder;
-  WebmDemux demux;
+  WebmVideoDemux demux;
   nx::vector<u8> next_bytes;
   f64 next_pts = 0.0;
   bool have_next = false;
@@ -196,14 +30,23 @@ struct HwVideoSource::Impl {
   bool valid = false;
   bool finished = false;
 
+  bool demux_next() {
+    const u8 *data = nullptr;
+    long len = 0;
+    if (!demux.next(data, len, next_pts))
+      return false;
+    next_bytes.assign(data, data + len);
+    return true;
+  }
+
   void pull_next(const bool looping) {
-    if (demux.next(next_bytes, next_pts)) {
+    if (demux_next()) {
       have_next = true;
       return;
     }
     if (looping) {
       demux.restart();
-      if (demux.next(next_bytes, next_pts)) {
+      if (demux_next()) {
         have_next = true;
         return;
       }
@@ -220,7 +63,7 @@ HwVideoSource::HwVideoSource() : m(std::make_unique<Impl>()) {}
 HwVideoSource::~HwVideoSource() = default;
 
 bool HwVideoSource::open(rhi::Device &device, const nx::string_view path) {
-  if (!m->demux.open(path)) {
+  if (!m->demux.open(path, "V_VP9")) {
     nx::logw("video: hw demux failed for '{}'", path);
     return false;
   }
@@ -244,7 +87,7 @@ bool HwVideoSource::finished() const noexcept { return m->finished; }
 HwFrame HwVideoSource::frame_at(const f64 target_seconds, const bool looping) {
   if (target_seconds + 1e-6 < m->current_pts) {
     m->decoder.reset_stream();
-    (void)m->demux.seek_to_keyframe(target_seconds);
+    (void)m->demux.seek(target_seconds);
     m->current_pts = -1.0;
     m->finished = false;
     m->pull_next(false);
