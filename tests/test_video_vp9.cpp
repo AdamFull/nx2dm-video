@@ -425,6 +425,92 @@ TEST_CASE("vp9 present: the sampleable copy holds the decoded picture") {
   CHECK(slot_mismatches == 0u);
 }
 
+TEST_CASE("vp9 convert: the ycbcr sampler yields the right RGB") {
+  TestDevice fixture;
+  if (!fixture.ready)
+    SKIP("no usable RHI device");
+  if (!fixture.device.video_decode_available())
+    SKIP("no hardware video-decode queue");
+
+  std::vector<u8> backing;
+  const std::vector<RawFrame> frames =
+      read_frames(NX_VIDEO_FIXTURE_DIR "/test.webm", backing, 2);
+  REQUIRE(!frames.empty());
+  REQUIRE(frames[0].key);
+
+  nxe::rhi::VideoDecoder decoder;
+  REQUIRE(decoder.init(fixture.device, nxe::rhi::VideoCodec::VP9, 320, 240));
+
+  nxe::rhi::DecodedPicture pic;
+  REQUIRE(decoder.decode(frames[0].bytes.data(),
+                         static_cast<u32>(frames[0].bytes.size()), pic));
+  REQUIRE(decoder.convert(pic.slot));
+
+  nx::vector<u8> rgba;
+  REQUIRE(decoder.read_rgba(pic.width, pic.height, rgba));
+  REQUIRE(rgba.size() == 320u * 240u * 4u);
+
+  // The oracle: libvpx's I420, converted to RGB by the same BT.709 narrow-range
+  // math the hardware sampler runs, with nearest chroma to match. Exactness is
+  // not the claim - a wrong colour matrix or range moves every pixel far past
+  // this tolerance - but rounding and chroma siting keep it within a few LSB.
+  const int w = static_cast<int>(pic.width);
+  const int h = static_cast<int>(pic.height);
+  const int cw = w / 2;
+
+  vpx_codec_ctx_t codec{};
+  REQUIRE(vpx_codec_dec_init(&codec, vpx_codec_vp9_dx(), nullptr, 0) ==
+          VPX_CODEC_OK);
+  REQUIRE(vpx_codec_decode(&codec, frames[0].bytes.data(),
+                           static_cast<unsigned int>(frames[0].bytes.size()),
+                           nullptr, 0) == VPX_CODEC_OK);
+  vpx_codec_iter_t it = nullptr;
+  const vpx_image_t *img = vpx_codec_get_frame(&codec, &it);
+  REQUIRE(img != nullptr);
+
+  const auto clamp8 = [](const float v) {
+    return static_cast<int>(v < 0.f ? 0.f : (v > 255.f ? 255.f : v));
+  };
+
+  double error_sum = 0.0;
+  int big = 0; // pixels a sharp chroma edge flips under nearest siting
+  bool all_opaque = true;
+  for (int y = 0; y < h; ++y)
+    for (int x = 0; x < w; ++x) {
+      const int Y = img->planes[VPX_PLANE_Y][y * img->stride[VPX_PLANE_Y] + x];
+      const int U =
+          img->planes[VPX_PLANE_U][(y / 2) * img->stride[VPX_PLANE_U] + x / 2];
+      const int V =
+          img->planes[VPX_PLANE_V][(y / 2) * img->stride[VPX_PLANE_V] + x / 2];
+      const float yf = (Y - 16) / 219.0f;
+      const float cb = (U - 128) / 224.0f;
+      const float cr = (V - 128) / 224.0f;
+      const int r = clamp8((yf + 1.5748f * cr) * 255.0f);
+      const int g = clamp8((yf - 0.1873f * cb - 0.4681f * cr) * 255.0f);
+      const int b = clamp8((yf + 1.8556f * cb) * 255.0f);
+      const usize p = (static_cast<usize>(y) * w + x) * 4;
+      const int dr = std::abs(rgba[p + 0] - r);
+      const int dg = std::abs(rgba[p + 1] - g);
+      const int db = std::abs(rgba[p + 2] - b);
+      error_sum += dr + dg + db;
+      if (nx::max(dr, nx::max(dg, db)) > 30)
+        ++big;
+      if (rgba[p + 3] != 255u)
+        all_opaque = false;
+    }
+  vpx_codec_destroy(&codec);
+
+  CHECK(all_opaque);
+  // A right matrix and range put the average within a fraction of an LSB. A
+  // wrong one moves every pixel and this explodes; nearest chroma still leaves a
+  // handful of edge pixels flipped, so the mean - not any single pixel - is the
+  // measure. Guard the flip count too: a real error (swapped planes, wrong
+  // range) both raises the mean and paints far more than a fringe.
+  const double mean_error = error_sum / (static_cast<double>(w) * h * 3);
+  CHECK(mean_error < 2.0);
+  CHECK(big * 100 < w * h); // fewer than 1% of pixels flipped by siting
+}
+
 TEST_CASE("vp9 parse: a truncated or empty frame is rejected, not walked off") {
   std::vector<u8> backing;
   const std::vector<RawFrame> frames =
