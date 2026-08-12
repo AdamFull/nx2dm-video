@@ -124,13 +124,10 @@ struct DyingStream {
   nxe::audio::VoiceHandle voice;
 };
 
-/// A clip's GPU textures. Render-thread only: created, uploaded and destroyed
-/// inside the pass, never touched by the simulation.
 struct Planes {
   nxe::scene::Entity owner{};
-  nxe::rhi::TextureHandle y;
-  nxe::rhi::TextureHandle cb;
-  nxe::rhi::TextureHandle cr;
+  nxe::rhi::TextureHandle luma;   ///< R8, full resolution
+  nxe::rhi::TextureHandle chroma; ///< R8G8 interleaved Cb,Cr, half resolution
   u32 width = 0;
   u32 height = 0;
   f64 uploaded_pts = -1.0;
@@ -426,18 +423,17 @@ private:
           continue;
         VideoDraw draw;
         draw.rect = rect;
-        draw.y_plane = device.texture_index(frame.luma);
-        draw.cb_plane = device.texture_index(frame.chroma);
-        draw.sampler_index = m_sampler;
         draw.uv_scale = frame.uv_scale;
+        draw.luma = frame.luma;
+        draw.chroma = frame.chroma;
+        draw.sampler_index = m_sampler;
         draw.colour = frame.colour;
-        draw.hw = true;
         draws.push_back(draw);
         continue;
       }
 
       Planes &planes = planes_for(device, item.owner, item.frame);
-      if (!planes.y.valid())
+      if (!planes.luma.valid())
         continue;
       // The present system re-emits the current frame every tick; only a new
       // one is worth the copy to the GPU.
@@ -448,9 +444,8 @@ private:
 
       VideoDraw draw;
       draw.rect = rect;
-      draw.y_plane = device.texture_index(planes.y);
-      draw.cb_plane = device.texture_index(planes.cb);
-      draw.cr_plane = device.texture_index(planes.cr);
+      draw.luma = planes.luma;
+      draw.chroma = planes.chroma;
       draw.sampler_index = m_sampler;
       draw.colour = item.frame.colour;
       draws.push_back(draw);
@@ -603,15 +598,15 @@ private:
   static void ensure_planes(nxe::rhi::Device &device, Planes &planes,
                             const VideoFrame &frame) {
     if (planes.width == frame.width && planes.height == frame.height &&
-        planes.y.valid())
+        planes.luma.valid())
       return;
     destroy_planes(device, planes);
-    planes.y = make_plane(device, frame.width, frame.height, "video.y");
-    planes.cb = make_plane(device, frame.chroma_width(), frame.chroma_height(),
-                           "video.cb");
-    planes.cr = make_plane(device, frame.chroma_width(), frame.chroma_height(),
-                           "video.cr");
-    if (!planes.y.valid() || !planes.cb.valid() || !planes.cr.valid()) {
+    planes.luma = make_texture(device, frame.width, frame.height,
+                               nxe::rhi::Format::R8_UNORM, "video.luma");
+    planes.chroma =
+        make_texture(device, frame.chroma_width(), frame.chroma_height(),
+                     nxe::rhi::Format::RG8_UNORM, "video.chroma");
+    if (!planes.luma.valid() || !planes.chroma.valid()) {
       destroy_planes(device, planes);
       return;
     }
@@ -620,11 +615,11 @@ private:
   }
 
   [[nodiscard]] static nxe::rhi::TextureHandle
-  make_plane(nxe::rhi::Device &device, const u32 width, const u32 height,
-             const nx::string_view name) {
+  make_texture(nxe::rhi::Device &device, const u32 width, const u32 height,
+               const nxe::rhi::Format format, const nx::string_view name) {
     nxe::rhi::TextureDesc desc{};
     desc.name = name;
-    desc.format = nxe::rhi::Format::R8_UNORM;
+    desc.format = format;
     desc.width = nx::max(width, 1u);
     desc.height = nx::max(height, 1u);
     desc.usage =
@@ -633,7 +628,7 @@ private:
   }
 
   static void destroy_planes(nxe::rhi::Device &device, Planes &planes) {
-    for (nxe::rhi::TextureHandle *tex : {&planes.y, &planes.cb, &planes.cr}) {
+    for (nxe::rhi::TextureHandle *tex : {&planes.luma, &planes.chroma}) {
       if (tex->valid())
         device.destroy_texture(*tex);
       *tex = {};
@@ -643,31 +638,35 @@ private:
     planes.uploaded_pts = -1.0; // fresh textures need the next frame uploaded
   }
 
-  static void upload(nxe::rhi::Device &device, const Planes &planes,
-                     const VideoFrame &frame) {
-    upload_plane(device, planes.y, frame.y, frame.width, frame.height);
-    upload_plane(device, planes.cb, frame.cb, frame.chroma_width(),
-                 frame.chroma_height());
-    upload_plane(device, planes.cr, frame.cr, frame.chroma_width(),
-                 frame.chroma_height());
+  void upload(nxe::rhi::Device &device, const Planes &planes,
+              const VideoFrame &frame) {
+    upload_texture(device, planes.luma, frame.y.data(), frame.y.size(),
+                   frame.width, frame.height, frame.width);
+    // Interleave the two chroma planes into the one R8G8 plane the shader
+    // samples, so a CPU frame takes the NV12 shape the hardware path decodes to.
+    interleave_chroma(frame, m_chroma_scratch);
+    if (!m_chroma_scratch.empty())
+      upload_texture(device, planes.chroma, m_chroma_scratch.data(),
+                     m_chroma_scratch.size(), frame.chroma_width(),
+                     frame.chroma_height(), frame.chroma_width() * 2);
   }
 
-  static void upload_plane(nxe::rhi::Device &device,
-                           const nxe::rhi::TextureHandle tex,
-                           const nx::vector<u8> &data, const u32 width,
-                           const u32 height) {
-    if (data.empty() || !tex.valid())
+  static void upload_texture(nxe::rhi::Device &device,
+                             const nxe::rhi::TextureHandle tex, const u8 *data,
+                             const usize size, const u32 width, const u32 height,
+                             const u32 row_pitch) {
+    if (data == nullptr || size == 0 || !tex.valid())
       return;
     nxe::rhi::ImageSubresource sub{};
     sub.offset = 0;
-    sub.size = nx::cast<u64>(data.size());
+    sub.size = nx::cast<u64>(size);
     sub.width = width;
     sub.height = height;
     sub.depth = 1;
-    sub.row_pitch = width; // R8: one byte per texel, tight.
+    sub.row_pitch = row_pitch;
     const nxe::rhi::ImageSubresource layout[1] = {sub};
     (void)device.uploader().upload_texture(
-        tex, std::span<const u8>(data.data(), data.size()),
+        tex, std::span<const u8>(data, size),
         std::span<const nxe::rhi::ImageSubresource>(layout, 1));
   }
 
@@ -679,6 +678,8 @@ private:
   // Streams a seek replaced, kept until their old voices drain.
   nx::vector<DyingStream> m_dying_streams;
   nx::vector<Planes> m_planes;
+  // Reused each upload to interleave Cb,Cr into the NV12 chroma plane.
+  nx::vector<u8> m_chroma_scratch;
   nx::vector<nx::unique_ptr<HwClip>> m_hw_clips;
   u32 m_sampler = 0;
   /// Frames decoded per present tick across all clips; 0 means no cap. Rotated

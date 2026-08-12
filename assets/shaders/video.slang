@@ -1,21 +1,24 @@
-// A decoded video frame is three planes of Y'CbCr (4:2:0), not RGB. This
-// samples the three and converts, drawing one quad into a screen rectangle
-// given in NDC. The quad is generated from the vertex id, so there is no vertex
-// buffer - a full-screen clip is just the rectangle (-1,-1)..(1,1).
+// A decoded video frame is Y'CbCr 4:2:0, not RGB: a full-resolution luma plane
+// and a half-resolution interleaved chroma plane (NV12). This samples the two
+// and converts, drawing one quad into a screen rectangle given in NDC. The quad
+// is generated from the vertex id, so there is no vertex buffer - a full-screen
+// clip is just the rectangle (-1,-1)..(1,1). Every decoder - CPU or hardware -
+// resolves to this one layout, so there is one draw path.
 
 import bindless;
 
+// Vectors first, then scalars: that order is 8-aligned identically under the
+// shader's std430 and the C++ glm mirror, so neither side needs padding to guess.
 struct VideoPush {
     /// Destination rectangle in NDC as (x0, y0, x1, y1). (-1,-1,1,1) is
     /// full-screen.
     float4 rect;
-
-    uint y_plane;
-    uint cb_plane;
-    uint cr_plane;
-    uint sampler_index;
     float2 uv_scale;
-    float2 luma;      ///< (kr, kb): the matrix's luma weights.
+    float2 luma_weights;  ///< (kr, kb): the colour matrix's luma weights.
+
+    uint luma;    ///< R8 luma plane.
+    uint chroma;  ///< R8G8 interleaved chroma (.r = Cb, .g = Cr).
+    uint sampler_index;
     uint full_range;  ///< 0 = limited (broadcast) range, 1 = full.
 };
 
@@ -23,8 +26,8 @@ struct VideoPush {
 VideoPush pc;
 
 float3 ycbcr_to_rgb(float y, float cb, float cr) {
-    const float kr = pc.luma.x;
-    const float kb = pc.luma.y;
+    const float kr = pc.luma_weights.x;
+    const float kb = pc.luma_weights.y;
     const float kg = 1.0 - kr - kb;
 
     float yl, b, r;
@@ -68,17 +71,9 @@ VertexOutput vs_main(uint vertex_id: SV_VertexID) {
 }
 
 [shader("fragment")]
-float4 fs_main_nv12(VertexOutput input): SV_Target {
-    const float2 uv = input.uv * pc.uv_scale;
-    const float  y  = sample_texture(pc.y_plane,  pc.sampler_index, uv).r;
-    const float2 c  = sample_texture(pc.cb_plane, pc.sampler_index, uv).rg;
-    return float4(ycbcr_to_rgb(y, c.r, c.g), 1.0);
-}
-
-[shader("fragment")]
 float4 fs_main(VertexOutput input): SV_Target {
-    const float y  = sample_texture(pc.y_plane,  pc.sampler_index, input.uv).r;
-    const float cb = sample_texture(pc.cb_plane, pc.sampler_index, input.uv).r;
-    const float cr = sample_texture(pc.cr_plane, pc.sampler_index, input.uv).r;
-    return float4(ycbcr_to_rgb(y, cb, cr), 1.0);
+    const float2 uv = input.uv * pc.uv_scale;
+    const float  y  = sample_texture(pc.luma,   pc.sampler_index, uv).r;
+    const float2 c  = sample_texture(pc.chroma, pc.sampler_index, uv).rg;
+    return float4(ycbcr_to_rgb(y, c.r, c.g), 1.0);
 }

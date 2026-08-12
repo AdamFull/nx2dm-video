@@ -36,6 +36,20 @@ struct VideoFrame {
   [[nodiscard]] u32 chroma_height() const noexcept { return (height + 1) / 2; }
 };
 
+inline void interleave_chroma(const VideoFrame &frame, nx::vector<u8> &out) {
+  const usize texels =
+      nx::cast<usize>(frame.chroma_width()) * frame.chroma_height();
+  if (frame.cb.size() < texels || frame.cr.size() < texels) {
+    out.clear();
+    return;
+  }
+  out.resize(texels * 2);
+  for (usize i = 0; i < texels; ++i) {
+    out[2 * i] = frame.cb[i];
+    out[2 * i + 1] = frame.cr[i];
+  }
+}
+
 /// A source of decoded frames. The always-available implementation is CPU
 /// software decode (libwebm + libvpx); the synthetic one drives the whole
 /// pipeline without a codec, which is what proves the engine side end to end.

@@ -21,9 +21,6 @@ void VideoRenderer::shutdown(rhi::Device &device) {
   if (m_pipeline.valid())
     device.destroy_pipeline(m_pipeline);
   m_pipeline = {};
-  if (m_pipeline_hw.valid())
-    device.destroy_pipeline(m_pipeline_hw);
-  m_pipeline_hw = {};
   if (m_shader.valid())
     device.destroy_shader(m_shader);
   m_shader = {};
@@ -39,8 +36,6 @@ bool VideoRenderer::ensure_pipeline(rhi::Device &device,
   // with the swapchain. Rebuilding is rare enough to be simple.
   if (m_pipeline.valid())
     device.destroy_pipeline(m_pipeline);
-  if (m_pipeline_hw.valid())
-    device.destroy_pipeline(m_pipeline_hw);
 
   m_pipeline = device.create_graphics_pipeline({
       .name = "video",
@@ -49,14 +44,7 @@ bool VideoRenderer::ensure_pipeline(rhi::Device &device,
       .color_formats = {format},
       .color_count = 1,
   });
-  m_pipeline_hw = device.create_graphics_pipeline({
-      .name = "video.nv12",
-      .vertex = {.shader = m_shader, .entry_point = "vs_main"},
-      .fragment = {.shader = m_shader, .entry_point = "fs_main_nv12"},
-      .color_formats = {format},
-      .color_count = 1,
-  });
-  if (!m_pipeline.valid() || !m_pipeline_hw.valid())
+  if (!m_pipeline.valid())
     return false;
   m_format = format;
   return true;
@@ -76,24 +64,17 @@ void VideoRenderer::draw(rhi::Device &device, rg::RenderGraph &graph,
   graph.add_pass(
       "video.draw",
       rg::SetupFn([target](rg::Builder &builder) { builder.color(0, target); }),
-      rg::ExecuteFn([this, local = std::move(local)](
+      rg::ExecuteFn([this, &device, local = std::move(local)](
                         rhi::CommandContext &cmd, const rg::Resources &) {
-        bool hw_bound = false;
-        bool any_bound = false;
+        cmd.bind_pipeline(m_pipeline);
         for (const VideoDraw &d : local) {
-          if (!any_bound || d.hw != hw_bound) {
-            cmd.bind_pipeline(d.hw ? m_pipeline_hw : m_pipeline);
-            hw_bound = d.hw;
-            any_bound = true;
-          }
           VideoPush push;
           push.rect = d.rect;
-          push.y_plane = d.y_plane;
-          push.cb_plane = d.cb_plane;
-          push.cr_plane = d.cr_plane;
-          push.sampler_index = d.sampler_index;
           push.uv_scale = d.uv_scale;
-          push.luma = luma_coeffs(d.colour.matrix);
+          push.luma_weights = luma_coeffs(d.colour.matrix);
+          push.luma = device.texture_index(d.luma);
+          push.chroma = device.texture_index(d.chroma);
+          push.sampler_index = d.sampler_index;
           push.full_range = d.colour.full_range ? 1u : 0u;
           cmd.push_constants(&push, sizeof(push));
           cmd.draw(6);

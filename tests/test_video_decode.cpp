@@ -174,6 +174,37 @@ TEST_CASE("video demux: re-opens for a second codec id on the same object") {
   CHECK(len > 0);
 }
 
+TEST_CASE("video frame: chroma interleaves into one NV12 R8G8 plane") {
+  // The CPU decode path produces three planes; the draw wants the NV12 shape the
+  // hardware path decodes to, so Cb,Cr interleave into one R8G8 plane. With the
+  // shader test proving that layout converts, this pins the other half.
+  nxm::video::VideoFrame f;
+  f.width = 4; // chroma is 2x2 = 4 texels
+  f.height = 4;
+  f.cb = {10, 11, 12, 13};
+  f.cr = {20, 21, 22, 23};
+
+  nx::vector<u8> out;
+  nxm::video::interleave_chroma(f, out);
+  REQUIRE(out.size() == 8);
+  // Each texel is (Cb, Cr); a swap would put Cr first.
+  CHECK(out[0] == 10);
+  CHECK(out[1] == 20);
+  CHECK(out[2] == 11);
+  CHECK(out[3] == 21);
+  CHECK(out[6] == 13);
+  CHECK(out[7] == 23);
+
+  // Short chroma leaves the output empty rather than overreading.
+  nxm::video::VideoFrame bad;
+  bad.width = 4;
+  bad.height = 4;
+  bad.cb = {1, 2};
+  nx::vector<u8> empty;
+  nxm::video::interleave_chroma(bad, empty);
+  CHECK(empty.empty());
+}
+
 TEST_CASE("video decode: every frame of the clip comes out, twice") {
   const MountedFixtures fixtures;
   REQUIRE(fixtures.ok);

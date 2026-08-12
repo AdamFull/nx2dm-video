@@ -1,14 +1,15 @@
 /**
  * @file test_video_shader.cpp
- * @brief What the video shader does with three YCbCr planes: that it converts
- * to RGB, and that the image is not upside down.
+ * @brief What the video shader does with an NV12 frame: that it converts to RGB
+ * for the colour it was decoded in, and that the image is not upside down.
  *
- * The orientation case is the one that cannot be reasoned about safely. Every
- * set_viewport in this engine emits a negative-height Vulkan viewport
- * (vk_resources.cpp), so a full-screen quad's UVs have to account for the flip
- * or the frame renders inverted - and nothing but reading the pixels back
- * catches it. This renders a top-bright/bottom-dark luma ramp and asserts the
- * bright end lands at the top of the target.
+ * Every decoder - CPU or hardware - resolves to one NV12 layout (a full-res R8
+ * luma plane and a half-res R8G8 interleaved chroma plane), so there is one
+ * shader and one draw. The orientation case is the one that cannot be reasoned
+ * about safely: every set_viewport in this engine emits a negative-height Vulkan
+ * viewport (vk_resources.cpp), so a full-screen quad's UVs have to account for
+ * the flip or the frame renders inverted - and nothing but reading the pixels
+ * back catches it.
  *
  * Skipped rather than failed on a machine with no usable device, like the rest
  * of the rendering suite.
@@ -28,17 +29,16 @@ namespace rhi = nxe::rhi;
 
 constexpr u32 TARGET = 8;
 
-// Mirrors VideoPush in shaders/video.slang. A plain float[4] rather than a
-// glm::vec4 so the test needs nothing but the RHI; the layout is the same
-// float4 the shader reads.
+// Mirrors VideoPush in shaders/video.slang: vectors first, then scalars, so the
+// std430 and this layout agree without padding. Plain arrays rather than glm so
+// the test needs nothing but the RHI.
 struct VideoPush {
   float rect[4] = {-1.f, -1.f, 1.f, 1.f};
-  u32 y_plane = 0;
-  u32 cb_plane = 0;
-  u32 cr_plane = 0;
-  u32 sampler_index = 0;
   float uv_scale[2] = {1.f, 1.f};
-  float luma[2] = {0.2126f, 0.0722f}; // BT.709 default
+  float luma_weights[2] = {0.2126f, 0.0722f}; // BT.709 default
+  u32 luma = 0;
+  u32 chroma = 0;
+  u32 sampler_index = 0;
   u32 full_range = 0;
 };
 
@@ -73,13 +73,14 @@ struct TestDevice {
   });
 }
 
-[[nodiscard]] rhi::TextureHandle make_plane(rhi::Device &device, const u32 width,
-                                            const u32 height,
-                                            const std::vector<u8> &data,
-                                            const nx::string_view name) {
+[[nodiscard]] rhi::TextureHandle upload(rhi::Device &device, const rhi::Format fmt,
+                                        const u32 width, const u32 height,
+                                        const u32 row_pitch,
+                                        const std::vector<u8> &data,
+                                        const nx::string_view name) {
   const rhi::TextureHandle tex = device.create_texture({
       .name = name,
-      .format = rhi::Format::R8_UNORM,
+      .format = fmt,
       .width = width,
       .height = height,
       .usage = rhi::TextureUsage::Sampled | rhi::TextureUsage::CopyDst,
@@ -91,7 +92,7 @@ struct TestDevice {
   sub.width = width;
   sub.height = height;
   sub.depth = 1;
-  sub.row_pitch = width;
+  sub.row_pitch = row_pitch;
   const rhi::ImageSubresource layout[1] = {sub};
   (void)device.uploader().upload_texture(
       tex, std::span<const u8>(data.data(), data.size()),
@@ -99,21 +100,38 @@ struct TestDevice {
   return tex;
 }
 
+// A full-resolution R8 luma plane.
+[[nodiscard]] rhi::TextureHandle make_luma(rhi::Device &device,
+                                           const std::vector<u8> &y) {
+  return upload(device, rhi::Format::R8_UNORM, TARGET, TARGET, TARGET, y, "luma");
+}
+
+// A half-resolution R8G8 chroma plane of one constant (Cb, Cr) - the NV12 shape
+// both decode paths produce.
+[[nodiscard]] rhi::TextureHandle make_chroma(rhi::Device &device, const u8 cb,
+                                             const u8 cr) {
+  const u32 cw = TARGET / 2;
+  const u32 ch = TARGET / 2;
+  std::vector<u8> data(nx::cast<usize>(cw) * ch * 2);
+  for (usize i = 0; i < data.size(); i += 2) {
+    data[i] = cb;
+    data[i + 1] = cr;
+  }
+  return upload(device, rhi::Format::RG8_UNORM, cw, ch, cw * 2, data, "chroma");
+}
+
 struct Rendered {
   rhi::ReadbackResult pixels;
   bool ok = false;
 };
 
-// Renders one full-screen video quad from the three planes into an RGBA8
-// target and reads it back. Leaves all handles for the caller to drop.
-[[nodiscard]] Rendered draw_planes(rhi::Device &device, rhi::ShaderHandle shader,
-                                   rhi::TextureHandle y, rhi::TextureHandle cb,
-                                   rhi::TextureHandle cr,
-                                   rhi::TextureHandle target,
-                                   rhi::SamplerHandle sampler,
-                                   const float kr = 0.2126f,
-                                   const float kb = 0.0722f,
-                                   const u32 full_range = 0) {
+// Renders one full-screen video quad from the NV12 planes into an RGBA8 target
+// and reads it back. Leaves all handles for the caller to drop.
+[[nodiscard]] Rendered draw(rhi::Device &device, rhi::ShaderHandle shader,
+                            rhi::TextureHandle luma, rhi::TextureHandle chroma,
+                            rhi::TextureHandle target, rhi::SamplerHandle sampler,
+                            const float kr = 0.2126f, const float kb = 0.0722f,
+                            const u32 full_range = 0) {
   const rhi::PipelineHandle pipeline = device.create_graphics_pipeline({
       .name = "video",
       .vertex = {.shader = shader, .entry_point = "vs_main"},
@@ -125,12 +143,11 @@ struct Rendered {
     return {};
 
   VideoPush push;
-  push.y_plane = device.texture_index(y);
-  push.cb_plane = device.texture_index(cb);
-  push.cr_plane = device.texture_index(cr);
+  push.luma = device.texture_index(luma);
+  push.chroma = device.texture_index(chroma);
   push.sampler_index = device.sampler_index(sampler);
-  push.luma[0] = kr;
-  push.luma[1] = kb;
+  push.luma_weights[0] = kr;
+  push.luma_weights[1] = kb;
   push.full_range = full_range;
 
   rhi::CommandContext cmd;
@@ -174,92 +191,14 @@ struct Rendered {
   return out;
 }
 
-// A two-component (RG8) texture, for the interleaved NV12 chroma plane.
-[[nodiscard]] rhi::TextureHandle make_rg8(rhi::Device &device, const u32 width,
-                                          const u32 height,
-                                          const std::vector<u8> &data,
-                                          const nx::string_view name) {
-  const rhi::TextureHandle tex = device.create_texture({
-      .name = name,
-      .format = rhi::Format::RG8_UNORM,
-      .width = width,
-      .height = height,
-      .usage = rhi::TextureUsage::Sampled | rhi::TextureUsage::CopyDst,
+[[nodiscard]] rhi::TextureHandle make_target(rhi::Device &device) {
+  return device.create_texture({
+      .name = "video target",
+      .format = rhi::Format::RGBA8_UNORM,
+      .width = TARGET,
+      .height = TARGET,
+      .usage = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::CopySrc,
   });
-  if (!tex.valid())
-    return {};
-  rhi::ImageSubresource sub{};
-  sub.size = nx::cast<u64>(data.size());
-  sub.width = width;
-  sub.height = height;
-  sub.depth = 1;
-  sub.row_pitch = width * 2;
-  const rhi::ImageSubresource layout[1] = {sub};
-  (void)device.uploader().upload_texture(
-      tex, std::span<const u8>(data.data(), data.size()),
-      std::span<const rhi::ImageSubresource>(layout, 1));
-  return tex;
-}
-
-[[nodiscard]] Rendered draw_nv12(rhi::Device &device, rhi::ShaderHandle shader,
-                                 rhi::TextureHandle luma,
-                                 rhi::TextureHandle chroma,
-                                 rhi::TextureHandle target,
-                                 rhi::SamplerHandle sampler) {
-  const rhi::PipelineHandle pipeline = device.create_graphics_pipeline({
-      .name = "video.nv12",
-      .vertex = {.shader = shader, .entry_point = "vs_main"},
-      .fragment = {.shader = shader, .entry_point = "fs_main_nv12"},
-      .color_formats = {rhi::Format::RGBA8_UNORM},
-      .color_count = 1,
-  });
-  if (!pipeline.valid())
-    return {};
-
-  VideoPush push;
-  push.y_plane = device.texture_index(luma);
-  push.cb_plane = device.texture_index(chroma);
-  push.sampler_index = device.sampler_index(sampler);
-
-  rhi::CommandContext cmd;
-  if (!device.begin_headless_frame(cmd)) {
-    device.destroy_pipeline(pipeline);
-    return {};
-  }
-  cmd.barrier(rhi::TextureBarrier{.texture = target,
-                                  .from = rhi::ResourceState::Undefined,
-                                  .to = rhi::ResourceState::ColorAttachment});
-  rhi::RenderPassDesc pass = {};
-  pass.name = "video.nv12";
-  pass.color[0].texture = target;
-  pass.color[0].load = rhi::LoadOp::Clear;
-  pass.color[0].store = rhi::StoreOp::Store;
-  pass.color[0].clear = rhi::clear_color(0.f, 0.f, 0.f, 1.f);
-  pass.color_count = 1;
-  cmd.begin_render_pass(pass);
-  cmd.set_viewport(
-      {.width = nx::cast<f32>(TARGET), .height = nx::cast<f32>(TARGET)});
-  cmd.set_scissor({{0, 0}, {TARGET, TARGET}});
-  cmd.bind_pipeline(pipeline);
-  cmd.push_constants(&push, sizeof(push));
-  cmd.draw(6, 1);
-  cmd.end_render_pass();
-  cmd.barrier(rhi::TextureBarrier{.texture = target,
-                                  .from = rhi::ResourceState::ColorAttachment,
-                                  .to = rhi::ResourceState::CopySrc});
-  if (!device.end_headless_frame()) {
-    device.destroy_pipeline(pipeline);
-    return {};
-  }
-  device.wait_idle();
-
-  Rendered out;
-  out.pixels = device.uploader().read_texture(target);
-  out.ok = out.pixels.data != nullptr;
-  if (out.ok)
-    device.uploader().wait(out.pixels.ticket);
-  device.destroy_pipeline(pipeline);
-  return out;
 }
 
 [[nodiscard]] usize texel(const u32 row, const u32 col) {
@@ -280,31 +219,19 @@ TEST_CASE("video shader: a grey frame converts to grey (BT.709)") {
 
   // Y = 220 everywhere, chroma neutral: a bright grey. Limited-range 709 puts
   // it near (220-16)*255/219 = 237 on every channel, with no colour cast.
-  const std::vector<u8> y(TARGET * TARGET, 220u);
-  const std::vector<u8> c((TARGET / 2) * (TARGET / 2), 128u);
-  const rhi::TextureHandle yt = make_plane(device, TARGET, TARGET, y, "y");
-  const rhi::TextureHandle cbt =
-      make_plane(device, TARGET / 2, TARGET / 2, c, "cb");
-  const rhi::TextureHandle crt =
-      make_plane(device, TARGET / 2, TARGET / 2, c, "cr");
+  const rhi::TextureHandle luma =
+      make_luma(device, std::vector<u8>(TARGET * TARGET, 220u));
+  const rhi::TextureHandle chroma = make_chroma(device, 128u, 128u);
   device.uploader().flush();
-  REQUIRE(yt.valid());
-  REQUIRE(cbt.valid());
-  REQUIRE(crt.valid());
+  REQUIRE(luma.valid());
+  REQUIRE(chroma.valid());
 
   const rhi::SamplerHandle sampler = device.create_sampler({.name = "video"});
   REQUIRE(sampler.valid());
-  const rhi::TextureHandle target = device.create_texture({
-      .name = "video target",
-      .format = rhi::Format::RGBA8_UNORM,
-      .width = TARGET,
-      .height = TARGET,
-      .usage = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::CopySrc,
-  });
+  const rhi::TextureHandle target = make_target(device);
   REQUIRE(target.valid());
 
-  const Rendered r =
-      draw_planes(device, shader, yt, cbt, crt, target, sampler);
+  const Rendered r = draw(device, shader, luma, chroma, target, sampler);
   REQUIRE(r.ok);
 
   const usize mid = texel(TARGET / 2, TARGET / 2);
@@ -320,9 +247,8 @@ TEST_CASE("video shader: a grey frame converts to grey (BT.709)") {
 
   device.destroy_texture(target);
   device.destroy_sampler(sampler);
-  device.destroy_texture(crt);
-  device.destroy_texture(cbt);
-  device.destroy_texture(yt);
+  device.destroy_texture(chroma);
+  device.destroy_texture(luma);
   device.destroy_shader(shader);
 }
 
@@ -340,48 +266,34 @@ TEST_CASE("video shader: the colour matrix and range change the result") {
   // Y + 2(1-kr)*Cr, so a smaller kr (BT.709) lifts it more than a larger one
   // (BT.601); and limited range scales the samples where full range does not.
   // The three encodings of the identical bytes must read back three reds.
-  const std::vector<u8> y(TARGET * TARGET, 128u);
-  const std::vector<u8> cb((TARGET / 2) * (TARGET / 2), 128u);
-  const std::vector<u8> cr((TARGET / 2) * (TARGET / 2), 180u);
-  const rhi::TextureHandle yt = make_plane(device, TARGET, TARGET, y, "y");
-  const rhi::TextureHandle cbt =
-      make_plane(device, TARGET / 2, TARGET / 2, cb, "cb");
-  const rhi::TextureHandle crt =
-      make_plane(device, TARGET / 2, TARGET / 2, cr, "cr");
+  const rhi::TextureHandle luma =
+      make_luma(device, std::vector<u8>(TARGET * TARGET, 128u));
+  const rhi::TextureHandle chroma = make_chroma(device, 128u, 180u);
   device.uploader().flush();
-  REQUIRE(yt.valid());
-  REQUIRE(cbt.valid());
-  REQUIRE(crt.valid());
+  REQUIRE(luma.valid());
+  REQUIRE(chroma.valid());
 
   const rhi::SamplerHandle sampler = device.create_sampler({.name = "video"});
   REQUIRE(sampler.valid());
-  const rhi::TextureHandle target = device.create_texture({
-      .name = "video target",
-      .format = rhi::Format::RGBA8_UNORM,
-      .width = TARGET,
-      .height = TARGET,
-      .usage = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::CopySrc,
-  });
+  const rhi::TextureHandle target = make_target(device);
   REQUIRE(target.valid());
 
   const usize mid = texel(TARGET / 2, TARGET / 2);
 
   // The readback buffer is reused between draws, so read each red before the
   // next draw overwrites it.
-  const Rendered a =
-      draw_planes(device, shader, yt, cbt, crt, target, sampler, 0.2126f,
-                  0.0722f, 0); // BT.709 limited
+  const Rendered a = draw(device, shader, luma, chroma, target, sampler, 0.2126f,
+                          0.0722f, 0); // BT.709 limited
   REQUIRE(a.ok);
   const int r709 = a.pixels.data[mid + 0];
 
-  const Rendered b = draw_planes(device, shader, yt, cbt, crt, target, sampler,
-                                 0.299f, 0.114f, 0); // BT.601 limited
+  const Rendered b = draw(device, shader, luma, chroma, target, sampler, 0.299f,
+                          0.114f, 0); // BT.601 limited
   REQUIRE(b.ok);
   const int r601 = b.pixels.data[mid + 0];
 
-  const Rendered c =
-      draw_planes(device, shader, yt, cbt, crt, target, sampler, 0.2126f,
-                  0.0722f, 1); // BT.709 full range
+  const Rendered c = draw(device, shader, luma, chroma, target, sampler, 0.2126f,
+                          0.0722f, 1); // BT.709 full range
   REQUIRE(c.ok);
   const int rfull = c.pixels.data[mid + 0];
 
@@ -390,13 +302,12 @@ TEST_CASE("video shader: the colour matrix and range change the result") {
 
   device.destroy_texture(target);
   device.destroy_sampler(sampler);
-  device.destroy_texture(crt);
-  device.destroy_texture(cbt);
-  device.destroy_texture(yt);
+  device.destroy_texture(chroma);
+  device.destroy_texture(luma);
   device.destroy_shader(shader);
 }
 
-TEST_CASE("video shader: the NV12 path converts and lands right way up") {
+TEST_CASE("video shader: the chroma channels convert, right way up") {
   TestDevice fixture;
   if (!fixture.ready)
     SKIP("no usable RHI device");
@@ -406,33 +317,23 @@ TEST_CASE("video shader: the NV12 path converts and lands right way up") {
   if (!shader.valid())
     SKIP("shaders are not built in this configuration");
 
-  std::vector<u8> luma(nx::cast<usize>(TARGET) * TARGET, 16u);
+  // Bright top half, dark bottom half; chroma pushes Cb high (blue-ward).
+  std::vector<u8> y(nx::cast<usize>(TARGET) * TARGET, 16u);
   for (u32 row = 0; row < TARGET / 2; ++row)
     for (u32 col = 0; col < TARGET; ++col)
-      luma[nx::cast<usize>(row) * TARGET + col] = 235u;
-  std::vector<u8> chroma(nx::cast<usize>(TARGET / 2) * (TARGET / 2) * 2, 128u);
-  for (usize i = 0; i < chroma.size(); i += 2)
-    chroma[i] = 200u; // Cb high -> blue push; Cr stays neutral
-
-  const rhi::TextureHandle yt = make_plane(device, TARGET, TARGET, luma, "y");
-  const rhi::TextureHandle ct =
-      make_rg8(device, TARGET / 2, TARGET / 2, chroma, "cbcr");
+      y[nx::cast<usize>(row) * TARGET + col] = 235u;
+  const rhi::TextureHandle luma = make_luma(device, y);
+  const rhi::TextureHandle chroma = make_chroma(device, 200u, 128u); // Cb high
   device.uploader().flush();
-  REQUIRE(yt.valid());
-  REQUIRE(ct.valid());
+  REQUIRE(luma.valid());
+  REQUIRE(chroma.valid());
 
   const rhi::SamplerHandle sampler = device.create_sampler({.name = "video"});
   REQUIRE(sampler.valid());
-  const rhi::TextureHandle target = device.create_texture({
-      .name = "video target",
-      .format = rhi::Format::RGBA8_UNORM,
-      .width = TARGET,
-      .height = TARGET,
-      .usage = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::CopySrc,
-  });
+  const rhi::TextureHandle target = make_target(device);
   REQUIRE(target.valid());
 
-  const Rendered r = draw_nv12(device, shader, yt, ct, target, sampler);
+  const Rendered r = draw(device, shader, luma, chroma, target, sampler);
   REQUIRE(r.ok);
 
   // In the dark-luma bottom, where chroma shows, high Cb pushes blue above red;
@@ -445,61 +346,7 @@ TEST_CASE("video shader: the NV12 path converts and lands right way up") {
 
   device.destroy_texture(target);
   device.destroy_sampler(sampler);
-  device.destroy_texture(ct);
-  device.destroy_texture(yt);
-  device.destroy_shader(shader);
-}
-
-TEST_CASE("video shader: the top of the image lands at the top of the frame") {
-  TestDevice fixture;
-  if (!fixture.ready)
-    SKIP("no usable RHI device");
-  rhi::Device &device = fixture.device;
-
-  const rhi::ShaderHandle shader = load_video(device);
-  if (!shader.valid())
-    SKIP("shaders are not built in this configuration");
-
-  // Top half of the image bright, bottom half dark; chroma neutral. Correctly
-  // oriented, the bright end reads back at row 0 - the top of the target.
-  std::vector<u8> y(TARGET * TARGET, 16u);
-  for (u32 row = 0; row < TARGET / 2; ++row)
-    for (u32 col = 0; col < TARGET; ++col)
-      y[nx::cast<usize>(row) * TARGET + col] = 235u;
-  const std::vector<u8> c((TARGET / 2) * (TARGET / 2), 128u);
-
-  const rhi::TextureHandle yt = make_plane(device, TARGET, TARGET, y, "y");
-  const rhi::TextureHandle cbt =
-      make_plane(device, TARGET / 2, TARGET / 2, c, "cb");
-  const rhi::TextureHandle crt =
-      make_plane(device, TARGET / 2, TARGET / 2, c, "cr");
-  device.uploader().flush();
-  REQUIRE(yt.valid());
-
-  const rhi::SamplerHandle sampler = device.create_sampler({.name = "video"});
-  REQUIRE(sampler.valid());
-  const rhi::TextureHandle target = device.create_texture({
-      .name = "video target",
-      .format = rhi::Format::RGBA8_UNORM,
-      .width = TARGET,
-      .height = TARGET,
-      .usage = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::CopySrc,
-  });
-  REQUIRE(target.valid());
-
-  const Rendered r =
-      draw_planes(device, shader, yt, cbt, crt, target, sampler);
-  REQUIRE(r.ok);
-
-  const int top = r.pixels.data[texel(0, TARGET / 2) + 1];
-  const int bottom = r.pixels.data[texel(TARGET - 1, TARGET / 2) + 1];
-  CHECK(top > 200);   // image top is bright
-  CHECK(bottom < 40); // image bottom is dark
-
-  device.destroy_texture(target);
-  device.destroy_sampler(sampler);
-  device.destroy_texture(crt);
-  device.destroy_texture(cbt);
-  device.destroy_texture(yt);
+  device.destroy_texture(chroma);
+  device.destroy_texture(luma);
   device.destroy_shader(shader);
 }

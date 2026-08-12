@@ -18,32 +18,32 @@
 
 namespace nxm::video {
 
-/// Mirrors VideoPush in shaders/video.slang: a vector then scalars, so neither
-/// side has padding to guess. `luma` is (kr, kb) - the matrix's luma weights,
-/// from which the shader derives the full YCbCr->RGB - and `full_range` picks
-/// the sample range.
+/// Mirrors VideoPush in shaders/video.slang: vectors first, then scalars, so the
+/// std430 and this glm layout agree without padding. `luma`/`chroma` are the
+/// bindless indices of the NV12 planes; `luma_weights` is (kr, kb), from which
+/// the shader derives the full YCbCr->RGB; `full_range` picks the sample range.
 struct VideoPush {
   glm::vec4 rect{-1.f, -1.f, 1.f, 1.f};
-  u32 y_plane = 0;
-  u32 cb_plane = 0;
-  u32 cr_plane = 0;
-  u32 sampler_index = 0;
   glm::vec2 uv_scale{1.f, 1.f};
-  glm::vec2 luma{0.2126f, 0.0722f}; // BT.709 default
+  glm::vec2 luma_weights{0.2126f, 0.0722f}; // BT.709 default
+  u32 luma = 0;
+  u32 chroma = 0;
+  u32 sampler_index = 0;
   u32 full_range = 0;
 };
 static_assert(sizeof(VideoPush) <= nxe::rhi::PUSH_CONSTANT_SIZE,
               "the video push block must fit the guaranteed push range");
 
+/// One quad to draw: the two NV12 plane textures, where to put it, and the
+/// colour it was decoded in. Every decoder - CPU or hardware - produces this,
+/// so there is a single draw.
 struct VideoDraw {
   glm::vec4 rect{-1.f, -1.f, 1.f, 1.f};
-  u32 y_plane = 0;
-  u32 cb_plane = 0;
-  u32 cr_plane = 0;
-  u32 sampler_index = 0;
   glm::vec2 uv_scale{1.f, 1.f};
+  nxe::rhi::TextureHandle luma;
+  nxe::rhi::TextureHandle chroma;
+  u32 sampler_index = 0;
   ColourInfo colour;
-  bool hw = false;
 };
 
 [[nodiscard]] inline glm::vec2 luma_coeffs(const ColourMatrix matrix) noexcept {
@@ -79,8 +79,7 @@ private:
                                      nxe::rhi::Format format);
 
   nxe::rhi::ShaderHandle m_shader;
-  nxe::rhi::PipelineHandle m_pipeline;      ///< three CPU planes (fs_main)
-  nxe::rhi::PipelineHandle m_pipeline_hw;   ///< hardware NV12 (fs_main_nv12)
+  nxe::rhi::PipelineHandle m_pipeline;
   nxe::rhi::Format m_format = nxe::rhi::Format::Unknown;
 };
 
