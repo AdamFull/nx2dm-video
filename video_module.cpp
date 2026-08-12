@@ -161,8 +161,12 @@ private:
 
     ctx.scene().registry().view<VideoPlayer>().each(
         [&](const nxe::scene::Entity entity, VideoPlayer &player) {
-          if (!player.autoplay)
+          // Stopped: leave any decoder untouched so reap releases it (and its
+          // voice), and show nothing.
+          if (!player.autoplay) {
+            player.finished = false;
             return;
+          }
           Decoder &decoder = decoder_for(entity);
           if (!decoder.playback.valid()) {
             SourcePtr source;
@@ -175,11 +179,13 @@ private:
                                                          SYNTH_HEIGHT,
                                                          SYNTH_FPS);
             decoder.playback.reset(std::move(source), player.looping);
-            start_audio(ctx, decoder, player);
+            if (m_audio_enabled)
+              start_audio(ctx, decoder, player);
           }
 
           const f64 step = advance_clock(ctx, decoder, dt);
           const VideoFrame *const frame = decoder.playback.advance(step);
+          player.finished = decoder.playback.finished();
           if (frame == nullptr)
             return;
 
@@ -421,6 +427,7 @@ private:
   nx::vector<Planes> m_planes;
   u32 m_sampler = 0;
   bool m_can_draw = false;
+  bool m_audio_enabled = false;
 };
 
 } // namespace

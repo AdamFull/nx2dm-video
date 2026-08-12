@@ -114,6 +114,9 @@ public:
       nx::logw("video: cannot init Opus decoder ({})", error);
       return false;
     }
+    // Off the stack: this runs on a scheduler worker whose stack is not the
+    // main thread's, and a 20 KB decode buffer per call is how it overflows.
+    m_pcm.resize(nx::cast<usize>(OPUS_MAX_FRAME) * MAX_CHANNELS);
     m_cluster = m_segment->GetFirst();
     return true;
   }
@@ -169,9 +172,8 @@ private:
     if (!next_packet(data, len))
       return false;
 
-    i16 pcm[OPUS_MAX_FRAME * MAX_CHANNELS];
-    const int got = opus_decode(m_opus, data, nx::cast<opus_int32>(len), pcm,
-                                OPUS_MAX_FRAME, 0);
+    const int got = opus_decode(m_opus, data, nx::cast<opus_int32>(len),
+                                m_pcm.data(), OPUS_MAX_FRAME, 0);
     if (got <= 0)
       return true; // skip a bad packet, try the next
 
@@ -185,8 +187,8 @@ private:
     }
     m_leftover_pos = 0;
     if (start < samples)
-      m_leftover.assign(pcm + nx::cast<usize>(start) * ch,
-                        pcm + nx::cast<usize>(samples) * ch);
+      m_leftover.assign(m_pcm.data() + nx::cast<usize>(start) * ch,
+                        m_pcm.data() + nx::cast<usize>(samples) * ch);
     else
       m_leftover.clear();
     return true;
@@ -252,6 +254,7 @@ private:
   u32 m_pre_skip_remaining = 0;
 
   nx::vector<u8> m_packet;
+  nx::vector<i16> m_pcm; // opus_decode target; sized once, never on the stack
   nx::vector<i16> m_leftover;
   usize m_leftover_pos = 0;
 };

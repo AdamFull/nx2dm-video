@@ -21,6 +21,7 @@ struct VideoPlayer {
   bool fullscreen = true;
   /// Destination as (x0, y0, x1, y1) in NDC; used only when !fullscreen.
   glm::vec4 rect{-1.f, -1.f, 1.f, 1.f};
+  bool finished = false;
 };
 
 } // namespace nxm::video
