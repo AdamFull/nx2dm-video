@@ -580,3 +580,65 @@ TEST_CASE("av1 parse: the sequence header from the WebM av1C is coherent") {
   nxe::rhi::Av1SequenceHeader tiny;
   CHECK_FALSE(nxe::rhi::parse_av1_codec_private(priv.data(), 3u, tiny));
 }
+
+TEST_CASE("av1 parse: the keyframe header lands on the right frame geometry") {
+  REQUIRE(nx::vfs::initialize());
+  struct Unmount {
+    ~Unmount() { nx::vfs::unmount_all(); }
+  } unmount;
+  REQUIRE(nx::vfs::mount("/", nx::vfs::make_host_device(NX_VIDEO_FIXTURE_DIR), 0)
+              .valid());
+
+  nxm::video::WebmVideoDemux demux;
+  REQUIRE(demux.open("/test_av1.webm", "V_AV01", "V_AV1"));
+  const std::span<const u8> priv = demux.codec_private();
+  nxe::rhi::Av1SequenceHeader seq;
+  REQUIRE(nxe::rhi::parse_av1_codec_private(priv.data(),
+                                            nx::cast<u32>(priv.size()), seq));
+
+  const u8 *bytes = nullptr;
+  long len = 0;
+  f64 pts = 0.0;
+  REQUIRE(demux.next(bytes, len, pts));
+  REQUIRE(len > 0);
+
+  // A first frame is a key frame: intra, refreshes every slot, no reference to
+  // load. Every field up to frame_size must have consumed the right bit count
+  // for the dimensions to come out at the container's 320x240, so this exercises
+  // the whole intra path, not just the size read.
+  const nxe::rhi::Av1RefState no_refs;
+  nxe::rhi::Av1FrameHeader hdr;
+  REQUIRE(nxe::rhi::parse_av1_frame_header(bytes, nx::cast<u32>(len), seq,
+                                           no_refs, hdr));
+  CHECK(hdr.valid);
+  CHECK_FALSE(hdr.show_existing_frame);
+  CHECK(hdr.picture.frame_type == STD_VIDEO_AV1_FRAME_TYPE_KEY);
+  CHECK(hdr.frame_is_intra);
+  CHECK(hdr.frame_width == 320u);
+  CHECK(hdr.frame_height == 240u);
+  CHECK(hdr.upscaled_width == 320u);
+  CHECK(hdr.render_width == 320u);
+  CHECK(hdr.render_height == 240u);
+  CHECK(hdr.picture.primary_ref_frame == 7u); // PRIMARY_REF_NONE
+  CHECK(hdr.picture.refresh_frame_flags == 0xFFu);
+
+  // The header must have parsed clean through quantization and the tiles: a
+  // real key frame is not lossless, and its base quantizer is a live value.
+  CHECK(hdr.quantization.base_q_idx > 0u);
+  CHECK(hdr.tile_info.TileCols >= 1u);
+  CHECK(hdr.tile_info.TileRows >= 1u);
+  CHECK(hdr.header_size > 0u);
+  CHECK(hdr.header_size <= nx::cast<u32>(len));
+
+  // The picture info's sub-struct pointers reference the header's own storage.
+  CHECK(hdr.picture.pTileInfo == &hdr.tile_info);
+  CHECK(hdr.picture.pQuantization == &hdr.quantization);
+  CHECK(hdr.picture.pLoopFilter == &hdr.loop_filter);
+  CHECK(hdr.picture.pGlobalMotion == &hdr.global_motion);
+  CHECK(hdr.tile_info.pMiColStarts == hdr.mi_col_starts);
+
+  // A buffer cut short of the full header fails rather than reading past it.
+  nxe::rhi::Av1FrameHeader truncated;
+  CHECK_FALSE(nxe::rhi::parse_av1_frame_header(bytes, 2u, seq, no_refs,
+                                               truncated));
+}
