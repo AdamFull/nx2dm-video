@@ -38,6 +38,8 @@ struct VideoPush {
   u32 cr_plane = 0;
   u32 sampler_index = 0;
   float uv_scale[2] = {1.f, 1.f};
+  float luma[2] = {0.2126f, 0.0722f}; // BT.709 default
+  u32 full_range = 0;
 };
 
 struct TestDevice {
@@ -108,7 +110,10 @@ struct Rendered {
                                    rhi::TextureHandle y, rhi::TextureHandle cb,
                                    rhi::TextureHandle cr,
                                    rhi::TextureHandle target,
-                                   rhi::SamplerHandle sampler) {
+                                   rhi::SamplerHandle sampler,
+                                   const float kr = 0.2126f,
+                                   const float kb = 0.0722f,
+                                   const u32 full_range = 0) {
   const rhi::PipelineHandle pipeline = device.create_graphics_pipeline({
       .name = "video",
       .vertex = {.shader = shader, .entry_point = "vs_main"},
@@ -124,6 +129,9 @@ struct Rendered {
   push.cb_plane = device.texture_index(cb);
   push.cr_plane = device.texture_index(cr);
   push.sampler_index = device.sampler_index(sampler);
+  push.luma[0] = kr;
+  push.luma[1] = kb;
+  push.full_range = full_range;
 
   rhi::CommandContext cmd;
   if (!device.begin_headless_frame(cmd)) {
@@ -309,6 +317,76 @@ TEST_CASE("video shader: a grey frame converts to grey (BT.709)") {
   const int bb = r.pixels.data[mid + 2];
   CHECK(std::abs(rr - gg) <= 2);
   CHECK(std::abs(gg - bb) <= 2);
+
+  device.destroy_texture(target);
+  device.destroy_sampler(sampler);
+  device.destroy_texture(crt);
+  device.destroy_texture(cbt);
+  device.destroy_texture(yt);
+  device.destroy_shader(shader);
+}
+
+TEST_CASE("video shader: the colour matrix and range change the result") {
+  TestDevice fixture;
+  if (!fixture.ready)
+    SKIP("no usable RHI device");
+  rhi::Device &device = fixture.device;
+
+  const rhi::ShaderHandle shader = load_video(device);
+  if (!shader.valid())
+    SKIP("shaders are not built in this configuration");
+
+  // A mid grey with a red-ward Cr, chroma otherwise neutral. Red is
+  // Y + 2(1-kr)*Cr, so a smaller kr (BT.709) lifts it more than a larger one
+  // (BT.601); and limited range scales the samples where full range does not.
+  // The three encodings of the identical bytes must read back three reds.
+  const std::vector<u8> y(TARGET * TARGET, 128u);
+  const std::vector<u8> cb((TARGET / 2) * (TARGET / 2), 128u);
+  const std::vector<u8> cr((TARGET / 2) * (TARGET / 2), 180u);
+  const rhi::TextureHandle yt = make_plane(device, TARGET, TARGET, y, "y");
+  const rhi::TextureHandle cbt =
+      make_plane(device, TARGET / 2, TARGET / 2, cb, "cb");
+  const rhi::TextureHandle crt =
+      make_plane(device, TARGET / 2, TARGET / 2, cr, "cr");
+  device.uploader().flush();
+  REQUIRE(yt.valid());
+  REQUIRE(cbt.valid());
+  REQUIRE(crt.valid());
+
+  const rhi::SamplerHandle sampler = device.create_sampler({.name = "video"});
+  REQUIRE(sampler.valid());
+  const rhi::TextureHandle target = device.create_texture({
+      .name = "video target",
+      .format = rhi::Format::RGBA8_UNORM,
+      .width = TARGET,
+      .height = TARGET,
+      .usage = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::CopySrc,
+  });
+  REQUIRE(target.valid());
+
+  const usize mid = texel(TARGET / 2, TARGET / 2);
+
+  // The readback buffer is reused between draws, so read each red before the
+  // next draw overwrites it.
+  const Rendered a =
+      draw_planes(device, shader, yt, cbt, crt, target, sampler, 0.2126f,
+                  0.0722f, 0); // BT.709 limited
+  REQUIRE(a.ok);
+  const int r709 = a.pixels.data[mid + 0];
+
+  const Rendered b = draw_planes(device, shader, yt, cbt, crt, target, sampler,
+                                 0.299f, 0.114f, 0); // BT.601 limited
+  REQUIRE(b.ok);
+  const int r601 = b.pixels.data[mid + 0];
+
+  const Rendered c =
+      draw_planes(device, shader, yt, cbt, crt, target, sampler, 0.2126f,
+                  0.0722f, 1); // BT.709 full range
+  REQUIRE(c.ok);
+  const int rfull = c.pixels.data[mid + 0];
+
+  CHECK(r709 > r601 + 4);            // the matrix is read, not assumed
+  CHECK(std::abs(r709 - rfull) > 4); // and so is the range
 
   device.destroy_texture(target);
   device.destroy_sampler(sampler);

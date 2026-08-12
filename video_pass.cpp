@@ -93,6 +93,8 @@ void VideoRenderer::draw(rhi::Device &device, rg::RenderGraph &graph,
           push.cr_plane = d.cr_plane;
           push.sampler_index = d.sampler_index;
           push.uv_scale = d.uv_scale;
+          push.luma = luma_coeffs(d.colour.matrix);
+          push.full_range = d.colour.full_range ? 1u : 0u;
           cmd.push_constants(&push, sizeof(push));
           cmd.draw(6);
         }

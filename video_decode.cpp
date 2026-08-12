@@ -93,6 +93,7 @@ private:
               m_last_pts, img->planes[VPX_PLANE_Y], img->stride[VPX_PLANE_Y],
               img->planes[VPX_PLANE_U], img->stride[VPX_PLANE_U],
               img->planes[VPX_PLANE_V], img->stride[VPX_PLANE_V]);
+    out.colour = m_demux.colour();
     return true;
   }
 
@@ -182,6 +183,7 @@ private:
               nx::cast<u32>(buf.displayed_height[1]), m_last_pts, buf.plane[0],
               buf.stride[0], buf.plane[1], buf.stride[1], buf.plane[2],
               buf.stride[2]);
+    out.colour = m_demux.colour();
     return true;
   }
 

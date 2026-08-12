@@ -83,6 +83,7 @@ public:
   [[nodiscard]] u32 width() const noexcept { return m_width; }
   [[nodiscard]] u32 height() const noexcept { return m_height; }
   [[nodiscard]] f64 frame_rate() const noexcept { return m_fps; }
+  [[nodiscard]] ColourInfo colour() const noexcept { return m_colour; }
   /// The track's CodecPrivate (codec setup data), empty when it carries none.
   [[nodiscard]] std::span<const u8> codec_private() const noexcept {
     return {m_codec_private.data(), m_codec_private.size()};
@@ -106,6 +107,7 @@ private:
   u32 m_width = 0;
   u32 m_height = 0;
   f64 m_fps = 30.0;
+  ColourInfo m_colour;
 };
 
 } // namespace nxm::video

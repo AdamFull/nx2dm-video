@@ -15,10 +15,36 @@ struct VideoPush {
     uint cr_plane;
     uint sampler_index;
     float2 uv_scale;
+    float2 luma;      ///< (kr, kb): the matrix's luma weights.
+    uint full_range;  ///< 0 = limited (broadcast) range, 1 = full.
 };
 
 [[vk::push_constant]]
 VideoPush pc;
+
+float3 ycbcr_to_rgb(float y, float cb, float cr) {
+    const float kr = pc.luma.x;
+    const float kb = pc.luma.y;
+    const float kg = 1.0 - kr - kb;
+
+    float yl, b, r;
+    if (pc.full_range != 0) {
+        yl = y;
+        b  = cb - 128.0 / 255.0;
+        r  = cr - 128.0 / 255.0;
+    } else {
+        yl = (y  - 16.0 / 255.0) * (255.0 / 219.0);
+        b  = (cb - 128.0 / 255.0) * (255.0 / 224.0);
+        r  = (cr - 128.0 / 255.0) * (255.0 / 224.0);
+    }
+
+    float3 rgb;
+    rgb.r = yl + 2.0 * (1.0 - kr) * r;
+    rgb.b = yl + 2.0 * (1.0 - kb) * b;
+    rgb.g = yl - (2.0 * (1.0 - kr) * kr / kg) * r
+               - (2.0 * (1.0 - kb) * kb / kg) * b;
+    return saturate(rgb);
+}
 
 struct VertexOutput {
     float4 position : SV_Position;
@@ -46,16 +72,7 @@ float4 fs_main_nv12(VertexOutput input): SV_Target {
     const float2 uv = input.uv * pc.uv_scale;
     const float  y  = sample_texture(pc.y_plane,  pc.sampler_index, uv).r;
     const float2 c  = sample_texture(pc.cb_plane, pc.sampler_index, uv).rg;
-
-    const float yl = (y   - 16.0 / 255.0) * (255.0 / 219.0);
-    const float b  = (c.r - 128.0 / 255.0) * (255.0 / 224.0);
-    const float r  = (c.g - 128.0 / 255.0) * (255.0 / 224.0);
-
-    float3 rgb;
-    rgb.r = yl + 1.5748 * r;
-    rgb.g = yl - 0.1873 * b - 0.4681 * r;
-    rgb.b = yl + 1.8556 * b;
-    return float4(saturate(rgb), 1.0);
+    return float4(ycbcr_to_rgb(y, c.r, c.g), 1.0);
 }
 
 [shader("fragment")]
@@ -63,14 +80,5 @@ float4 fs_main(VertexOutput input): SV_Target {
     const float y  = sample_texture(pc.y_plane,  pc.sampler_index, input.uv).r;
     const float cb = sample_texture(pc.cb_plane, pc.sampler_index, input.uv).r;
     const float cr = sample_texture(pc.cr_plane, pc.sampler_index, input.uv).r;
-
-    const float yl = (y  - 16.0 / 255.0) * (255.0 / 219.0);
-    const float b  = (cb - 128.0 / 255.0) * (255.0 / 224.0);
-    const float r  = (cr - 128.0 / 255.0) * (255.0 / 224.0);
-
-    float3 rgb;
-    rgb.r = yl + 1.5748 * r;
-    rgb.g = yl - 0.1873 * b - 0.4681 * r;
-    rgb.b = yl + 1.8556 * b;
-    return float4(saturate(rgb), 1.0);
+    return float4(ycbcr_to_rgb(y, cb, cr), 1.0);
 }

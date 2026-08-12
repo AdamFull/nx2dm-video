@@ -407,6 +407,7 @@ private:
         draw.cb_plane = device.texture_index(frame.chroma);
         draw.sampler_index = m_sampler;
         draw.uv_scale = frame.uv_scale;
+        draw.colour = frame.colour;
         draw.hw = true;
         draws.push_back(draw);
         continue;
@@ -428,6 +429,7 @@ private:
       draw.cb_plane = device.texture_index(planes.cb);
       draw.cr_plane = device.texture_index(planes.cr);
       draw.sampler_index = m_sampler;
+      draw.colour = item.frame.colour;
       draws.push_back(draw);
     }
 

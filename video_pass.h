@@ -5,6 +5,8 @@
  * @brief The video quad, recorded into the frame (namespace nxm::video).
  */
 
+#include "video/video_source.h"
+
 #include "core/rendering/graph/render_graph.h"
 #include "core/rendering/rhi/bindless.h"
 #include "core/rendering/rhi/descs.h"
@@ -17,7 +19,9 @@
 namespace nxm::video {
 
 /// Mirrors VideoPush in shaders/video.slang: a vector then scalars, so neither
-/// side has padding to guess.
+/// side has padding to guess. `luma` is (kr, kb) - the matrix's luma weights,
+/// from which the shader derives the full YCbCr->RGB - and `full_range` picks
+/// the sample range.
 struct VideoPush {
   glm::vec4 rect{-1.f, -1.f, 1.f, 1.f};
   u32 y_plane = 0;
@@ -25,6 +29,8 @@ struct VideoPush {
   u32 cr_plane = 0;
   u32 sampler_index = 0;
   glm::vec2 uv_scale{1.f, 1.f};
+  glm::vec2 luma{0.2126f, 0.0722f}; // BT.709 default
+  u32 full_range = 0;
 };
 static_assert(sizeof(VideoPush) <= nxe::rhi::PUSH_CONSTANT_SIZE,
               "the video push block must fit the guaranteed push range");
@@ -36,8 +42,21 @@ struct VideoDraw {
   u32 cr_plane = 0;
   u32 sampler_index = 0;
   glm::vec2 uv_scale{1.f, 1.f};
+  ColourInfo colour;
   bool hw = false;
 };
+
+[[nodiscard]] inline glm::vec2 luma_coeffs(const ColourMatrix matrix) noexcept {
+  switch (matrix) {
+  case ColourMatrix::BT601:
+    return {0.299f, 0.114f};
+  case ColourMatrix::BT2020:
+    return {0.2627f, 0.0593f};
+  case ColourMatrix::BT709:
+    break;
+  }
+  return {0.2126f, 0.0722f};
+}
 
 class VideoRenderer {
 public:

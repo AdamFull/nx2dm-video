@@ -12,6 +12,13 @@
 
 namespace nxm::video {
 
+enum class ColourMatrix : u8 { BT601, BT709, BT2020 };
+
+struct ColourInfo {
+  ColourMatrix matrix = ColourMatrix::BT709;
+  bool full_range = false;
+};
+
 /// One decoded frame: planar Y'CbCr 4:2:0, tightly packed. Chroma is
 /// (width+1)/2 by (height+1)/2. `pts` is the presentation time in seconds.
 struct VideoFrame {
@@ -20,6 +27,7 @@ struct VideoFrame {
   u32 y_pitch = 0;
   u32 c_pitch = 0;
   f64 pts = 0.0;
+  ColourInfo colour;
   nx::vector<u8> y;
   nx::vector<u8> cb;
   nx::vector<u8> cr;

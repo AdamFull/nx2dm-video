@@ -4,6 +4,39 @@
 #include "core/foundation/vfs/vfs.h"
 
 namespace nxm::video {
+namespace {
+
+[[nodiscard]] ColourInfo classify_colour(const mkvparser::VideoTrack &track,
+                                         const u32 height) {
+  ColourInfo out;
+  const mkvparser::Colour *const c = track.GetColour();
+  const long long mc =
+      c != nullptr ? c->matrix_coefficients : mkvparser::Colour::kValueNotPresent;
+  const long long range =
+      c != nullptr ? c->range : mkvparser::Colour::kValueNotPresent;
+
+  switch (mc) {
+  case 1: // BT.709
+    out.matrix = ColourMatrix::BT709;
+    break;
+  case 4: // FCC
+  case 5: // BT.470BG (BT.601 625)
+  case 6: // SMPTE 170M (BT.601 525)
+    out.matrix = ColourMatrix::BT601;
+    break;
+  case 9:  // BT.2020 non-constant luminance
+  case 10: // BT.2020 constant luminance
+    out.matrix = ColourMatrix::BT2020;
+    break;
+  default: // unspecified or absent
+    out.matrix = height >= 720 ? ColourMatrix::BT709 : ColourMatrix::BT601;
+    break;
+  }
+  out.full_range = range == 2; // 2 = full; 1 = broadcast; 0/absent = broadcast
+  return out;
+}
+
+} // namespace
 
 bool WebmVideoDemux::open(const nx::string_view path, const char *const codec_id,
                           const char *const codec_id_alt) {
@@ -54,6 +87,7 @@ bool WebmVideoDemux::open(const nx::string_view path, const char *const codec_id
   m_fps = video->GetFrameRate();
   if (m_fps <= 0.0)
     m_fps = 30.0;
+  m_colour = classify_colour(*video, m_height);
   size_t priv_size = 0;
   if (const u8 *const priv = video->GetCodecPrivate(priv_size);
       priv != nullptr && priv_size != 0)

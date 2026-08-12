@@ -120,6 +120,7 @@ HwFrame HwVideoSource::frame_at(const f64 target_seconds, const bool looping) {
   if (advanced && m->decoder.show_last()) {
     m->frame.luma = m->decoder.luma_texture();
     m->frame.chroma = m->decoder.chroma_texture();
+    m->frame.colour = m->demux.colour();
     const rhi::Extent2D coded = m->decoder.coded_extent();
     m->frame.uv_scale = {
         coded.width != 0 ? nx::cast<f32>(shown_w) / coded.width : 1.f,

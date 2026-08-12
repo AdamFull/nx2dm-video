@@ -196,6 +196,30 @@ TEST_CASE("video decode: every frame of the clip comes out, twice") {
   CHECK(decode_all(*src) == 45);
 }
 
+TEST_CASE("video decode: colour matrix and range come from the container") {
+  const MountedFixtures fixtures;
+  REQUIRE(fixtures.ok);
+
+  // test_bt601_full.webm is tagged BT.601 (smpte170m) full-range: the frame must
+  // carry that, not the BT.709-limited default the code assumed before.
+  const nxm::video::SourcePtr tagged =
+      nxm::video::open_webm("/test_bt601_full.webm");
+  REQUIRE(tagged != nullptr);
+  nxm::video::VideoFrame frame;
+  REQUIRE(tagged->next(frame));
+  CHECK(frame.colour.matrix == nxm::video::ColourMatrix::BT601);
+  CHECK(frame.colour.full_range);
+
+  // The untagged 320x240 fixture leaves the matrix unspecified, so the
+  // resolution heuristic decides: SD is BT.601, and its range is broadcast.
+  const nxm::video::SourcePtr untagged = nxm::video::open_webm("/test.webm");
+  REQUIRE(untagged != nullptr);
+  nxm::video::VideoFrame sd;
+  REQUIRE(untagged->next(sd));
+  CHECK(sd.colour.matrix == nxm::video::ColourMatrix::BT601);
+  CHECK_FALSE(sd.colour.full_range);
+}
+
 TEST_CASE("video decode: a missing clip is a null source, not a crash") {
   const MountedFixtures fixtures;
   REQUIRE(fixtures.ok);

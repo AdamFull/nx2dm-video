@@ -5,6 +5,8 @@
  * @brief The hardware-decode clip (namespace nxm::video).
  */
 
+#include "video/video_source.h"
+
 #include "core/rendering/rhi/device.h"
 
 #include "core/foundation/strings/utf8_string_view.h"
@@ -21,6 +23,7 @@ struct HwFrame {
   nxe::rhi::TextureHandle luma;
   nxe::rhi::TextureHandle chroma;
   glm::vec2 uv_scale{1.f, 1.f};
+  ColourInfo colour;
   [[nodiscard]] bool valid() const noexcept {
     return luma.valid() && chroma.valid();
   }

@@ -260,6 +260,7 @@ private:
     out.y_pitch = w;
     out.c_pitch = cw;
     out.pts = nx::cast<f64>(pts_us) / 1e6;
+    out.colour = m_demux.colour();
     out.y.resize(nx::cast<usize>(w) * h);
     out.cb.resize(nx::cast<usize>(cw) * ch);
     out.cr.resize(nx::cast<usize>(cw) * ch);
