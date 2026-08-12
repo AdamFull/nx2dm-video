@@ -25,6 +25,8 @@ if (ANDROID)
     # The hardware decode path: NDK MediaCodec (mediandk) into I420, drawn by the
     # same FrameSource as the CPU decoder. log for diagnostics.
     target_link_libraries(nx_module_video PUBLIC mediandk log)
+    set_source_files_properties(video_mediacodec.cpp PROPERTIES
+            COMPILE_DEFINITIONS __ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__)
 endif ()
 
 if (NX_BUILD_TESTS)
