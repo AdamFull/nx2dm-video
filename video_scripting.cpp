@@ -48,6 +48,19 @@ void expose_video_services(nxe::script::Host &host, nxe::ModuleContext &ctx) {
     player->looping = on;
     return true;
   });
+
+  host.expose_as("video_seek", [&ctx](const sys::Entity e, const f32 seconds) {
+    VideoPlayer *const player = player_of(ctx, e);
+    if (player == nullptr)
+      return false;
+    player->seek_to = seconds < 0.f ? 0.0 : nx::cast<f64>(seconds);
+    return true;
+  });
+
+  host.expose_as("video_position", [&ctx](const sys::Entity e) {
+    const VideoPlayer *const player = player_of(ctx, e);
+    return player == nullptr ? 0.f : nx::cast<f32>(player->position);
+  });
 }
 
 } // namespace nxm::video

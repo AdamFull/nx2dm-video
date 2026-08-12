@@ -15,6 +15,14 @@
     {
       "name": "video_looping",
       "signature": "(number,boolean)->(boolean)"
+    },
+    {
+      "name": "video_seek",
+      "signature": "(number,number)->(boolean)"
+    },
+    {
+      "name": "video_position",
+      "signature": "(number)->(number)"
     }
   ]
 }

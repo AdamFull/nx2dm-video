@@ -224,11 +224,18 @@ private:
           start_audio(ctx, decoder, player);
       }
 
+      if (player.seek_to >= 0.0) {
+        (void)decoder.playback.seek(player.seek_to);
+        stop_clip_audio(ctx, decoder);
+        player.seek_to = -1.0;
+      }
+
       const f64 step = advance_clock(ctx, decoder, dt);
       const VideoFrame *const frame = decoder.playback.advance(step, budget);
       player.finished = decoder.playback.finished();
       if (frame == nullptr)
         continue;
+      player.position = frame->pts;
 
       VideoItem item;
       item.owner = a.entity;
@@ -367,6 +374,12 @@ private:
     decoder.voice = ctx.mixer().play(decoder.audio, {});
     decoder.audio_started = true;
     decoder.last_dsp = ctx.mixer().dsp_frame();
+  }
+
+  static void stop_clip_audio(nxe::ModuleContext &ctx, Decoder &decoder) {
+    if (decoder.audio_started && ctx.mixer().valid())
+      ctx.mixer().stop(decoder.voice);
+    decoder.audio_started = false;
   }
 
   // Dead entities with a playing voice cannot be freed yet: the audio thread may

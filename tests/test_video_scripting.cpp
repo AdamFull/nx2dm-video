@@ -57,6 +57,8 @@ TEST_CASE("video scripting: every service is exposed with the shape a script "
       {"video_stop", "(number)->(boolean)"},
       {"video_finished", "(number)->(boolean)"},
       {"video_looping", "(number,boolean)->(boolean)"},
+      {"video_seek", "(number,number)->(boolean)"},
+      {"video_position", "(number)->(number)"},
   };
 
   CHECK(exposed.services.size() == nx::array_size(WANT));
