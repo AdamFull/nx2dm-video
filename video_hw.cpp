@@ -94,14 +94,57 @@ public:
   void restart() {
     m_cluster = m_segment != nullptr ? m_segment->GetFirst() : nullptr;
     m_entry = nullptr;
+    m_at_entry = false;
+  }
+
+  [[nodiscard]] bool seek_to_keyframe(const f64 target) {
+    if (m_segment == nullptr)
+      return false;
+    const long long target_ns =
+        nx::cast<long long>(nx::max(target, 0.0) * 1e9);
+    const mkvparser::Cluster *key_cluster = nullptr;
+    const mkvparser::BlockEntry *key_entry = nullptr;
+    bool passed = false;
+    for (const mkvparser::Cluster *cluster = m_segment->GetFirst();
+         cluster != nullptr && !cluster->EOS() && !passed;
+         cluster = m_segment->GetNext(cluster)) {
+      const mkvparser::BlockEntry *entry = nullptr;
+      long status = cluster->GetFirst(entry);
+      while (status >= 0 && entry != nullptr && !entry->EOS()) {
+        const mkvparser::Block *const block = entry->GetBlock();
+        if (block != nullptr && block->GetTrackNumber() == m_track) {
+          if (block->GetTime(cluster) > target_ns) {
+            passed = true;
+            break;
+          }
+          if (block->IsKey()) {
+            key_cluster = cluster;
+            key_entry = entry;
+          }
+        }
+        const mkvparser::BlockEntry *n = nullptr;
+        status = cluster->GetNext(entry, n);
+        entry = n;
+      }
+    }
+    if (key_entry == nullptr) { // before the first keyframe: the start is it
+      restart();
+      return true;
+    }
+    m_cluster = key_cluster;
+    m_entry = key_entry;
+    m_at_entry = true; // next() decodes this block, not the one after
+    return true;
   }
 
   [[nodiscard]] bool next(nx::vector<u8> &out, f64 &pts) {
     while (m_cluster != nullptr && !m_cluster->EOS()) {
       long status = 0;
-      if (m_entry == nullptr)
+      if (m_at_entry) {
+        m_at_entry = false; // a seek left m_entry on the block to decode
+      } else if (m_entry == nullptr) {
         status = m_cluster->GetFirst(m_entry);
-      else {
+      } else {
         const mkvparser::BlockEntry *n = nullptr;
         status = m_cluster->GetNext(m_entry, n);
         m_entry = n;
@@ -133,6 +176,7 @@ private:
   mkvparser::Segment *m_segment = nullptr;
   const mkvparser::Cluster *m_cluster = nullptr;
   const mkvparser::BlockEntry *m_entry = nullptr;
+  bool m_at_entry = false;
   long long m_track = 0;
   u32 m_width = 0;
   u32 m_height = 0;
@@ -198,6 +242,14 @@ f64 HwVideoSource::position() const noexcept { return m->current_pts; }
 bool HwVideoSource::finished() const noexcept { return m->finished; }
 
 HwFrame HwVideoSource::frame_at(const f64 target_seconds, const bool looping) {
+  if (target_seconds + 1e-6 < m->current_pts) {
+    m->decoder.reset_stream();
+    (void)m->demux.seek_to_keyframe(target_seconds);
+    m->current_pts = -1.0;
+    m->finished = false;
+    m->pull_next(false);
+  }
+
   bool advanced = false;
   u32 shown_w = 0;
   u32 shown_h = 0;

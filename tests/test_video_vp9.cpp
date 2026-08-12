@@ -520,6 +520,11 @@ TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
   REQUIRE(nx::vfs::mount("/", nx::vfs::make_host_device(NX_VIDEO_FIXTURE_DIR), 0)
               .valid());
 
+  std::vector<u8> backing;
+  const std::vector<RawFrame> frames =
+      read_frames(NX_VIDEO_FIXTURE_DIR "/test.webm", backing, 2);
+  REQUIRE(!frames.empty());
+
   nxm::video::HwVideoSource src;
   REQUIRE(src.open(fixture.device, "/test.webm"));
   CHECK(src.width() == 320u);
@@ -541,6 +546,24 @@ TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
   CHECK(src.position() > 0.8);
   CHECK(src.position() < 1.2);
   CHECK_FALSE(src.finished());
+
+  const nxm::video::HwFrame back = src.frame_at(0.0, false);
+  REQUIRE(back.valid());
+  CHECK(src.position() < 0.2);
+  {
+    const nxe::rhi::ReadbackResult y =
+        fixture.device.uploader().read_texture(back.luma);
+    REQUIRE(y.data != nullptr);
+    fixture.device.uploader().wait(y.ticket);
+    const VpxLuma ref = vpx_decode_luma(frames, 0);
+    REQUIRE(ref.ok);
+    usize mism = 0;
+    for (u32 row = 0; row < 240; ++row)
+      for (u32 col = 0; col < 320; ++col)
+        if (y.data[row * src.width() + col] != ref.y[row * 320 + col])
+          ++mism;
+    CHECK(mism == 0u);
+  }
 
   // Past the end, a non-looping clip finishes and holds its last frame.
   for (int i = 0; i < 5; ++i)

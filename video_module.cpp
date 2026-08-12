@@ -26,6 +26,7 @@
 #include "core/foundation/core/foundation.h"
 #include "core/foundation/diagnostics/log.h"
 
+#include <atomic>
 #include <span>
 #include <utility>
 
@@ -60,6 +61,7 @@ struct VideoItem {
   bool hw = false;
   bool looping = false;
   nx::string clip;
+  std::atomic<bool> *hw_finished = nullptr;
 };
 
 struct VideoChannel {
@@ -90,6 +92,8 @@ struct Decoder {
   bool initialized = false;
   bool hw = false;
   f64 hw_clock = 0.0;
+  // Set by the render thread when a non-looping hardware clip ends; read here.
+  std::atomic<bool> hw_finished{false};
 };
 
 /// A stream a seek replaced, kept alive until its old voice has drained it - the
@@ -302,13 +306,16 @@ private:
 
       if (decoder.hw) {
         // No decode here - the render side does it. Just carry the clock forward
-        // and hand over the show-time.
+        // and hand over the show-time; end-of-stream comes back through the
+        // atomic the render thread wrote last tick.
         decoder.hw_clock += step;
         player.position = decoder.hw_clock;
+        player.finished = decoder.hw_finished.load(std::memory_order_relaxed);
         item.hw = true;
         item.clip = player.clip;
         item.looping = player.looping;
         item.pts = decoder.hw_clock;
+        item.hw_finished = &decoder.hw_finished;
         channel.items.push_back(std::move(item));
         continue;
       }
@@ -382,6 +389,10 @@ private:
         if (clip.failed)
           continue;
         const HwFrame frame = clip.source.frame_at(item.pts, item.looping);
+        // Report end-of-stream back to the simulation (it reads it next tick).
+        if (item.hw_finished != nullptr)
+          item.hw_finished->store(clip.source.finished(),
+                                  std::memory_order_relaxed);
         if (!frame.valid())
           continue;
         VideoDraw draw;
