@@ -642,3 +642,47 @@ TEST_CASE("av1 parse: the keyframe header lands on the right frame geometry") {
   CHECK_FALSE(nxe::rhi::parse_av1_frame_header(bytes, 2u, seq, no_refs,
                                                truncated));
 }
+
+TEST_CASE("av1 decode: a session and its parameters come up from the seq header") {
+  TestDevice fixture;
+  if (!fixture.ready)
+    SKIP("no usable RHI device");
+  if (!fixture.device.video_decode_av1_available())
+    SKIP("no hardware AV1 decode");
+
+  REQUIRE(nx::vfs::initialize());
+  struct Unmount {
+    ~Unmount() { nx::vfs::unmount_all(); }
+  } unmount;
+  REQUIRE(nx::vfs::mount("/", nx::vfs::make_host_device(NX_VIDEO_FIXTURE_DIR), 0)
+              .valid());
+
+  nxm::video::WebmVideoDemux demux;
+  REQUIRE(demux.open("/test_av1.webm", "V_AV01", "V_AV1"));
+  const std::span<const u8> priv = demux.codec_private();
+  nxe::rhi::Av1SequenceHeader seq;
+  REQUIRE(nxe::rhi::parse_av1_codec_private(priv.data(),
+                                            nx::cast<u32>(priv.size()), seq));
+
+  // AV1 sessions need the sequence header at creation (it becomes the session
+  // parameters), unlike VP9 which reads its parameters from each frame.
+  nxe::rhi::VideoDecoder decoder;
+  REQUIRE(decoder.init(fixture.device, nxe::rhi::VideoCodec::AV1, demux.width(),
+                       demux.height(), &seq));
+  CHECK(decoder.ready());
+  CHECK(decoder.extent().width >= 320u);
+  CHECK(decoder.extent().height >= 240u);
+  CHECK(decoder.dpb_slots() > 0u);
+  CHECK(decoder.dpb_image_count() == decoder.dpb_slots());
+  for (u32 slot = 0; slot < decoder.dpb_slots(); ++slot)
+    CHECK(decoder.dpb_view(slot) != VK_NULL_HANDLE);
+
+  // Without a sequence header there are no session parameters to build: a clean
+  // failure, not a crash.
+  nxe::rhi::VideoDecoder no_seq;
+  CHECK_FALSE(no_seq.init(fixture.device, nxe::rhi::VideoCodec::AV1, 320, 240,
+                          nullptr));
+
+  decoder.shutdown();
+  CHECK_FALSE(decoder.ready());
+}
