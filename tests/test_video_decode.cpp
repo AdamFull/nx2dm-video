@@ -74,6 +74,20 @@ private:
   return true;
 }
 
+[[nodiscard]] u64 count_samples(nxe::audio::IDecoder &dec) {
+  std::vector<i16> buf(nx::cast<usize>(48000u) * dec.format().channels);
+  u64 total = 0;
+  for (;;) {
+    const u64 n = dec.read(buf.data(), 48000);
+    if (n == 0)
+      break;
+    total += n;
+    if (total > nx::cast<u64>(48000) * 60) // runaway guard
+      break;
+  }
+  return total;
+}
+
 [[nodiscard]] int decode_all(nxm::video::FrameSource &src) {
   nxm::video::VideoFrame frame;
   int count = 0;
@@ -277,6 +291,43 @@ TEST_CASE("video audio: a Vorbis track decodes to PCM, and has sound") {
   CHECK(nxm::video::open_webm_audio("/test_audio.webm") != nullptr);
   CHECK(nxm::video::open_webm_vorbis("/test_audio.webm") == nullptr);
   CHECK(nxm::video::open_webm_vorbis("/nope.webm") == nullptr);
+}
+
+TEST_CASE("video audio: an audio track seeks to a time, and home again") {
+  const MountedFixtures fixtures;
+  REQUIRE(fixtures.ok);
+
+  struct Clip {
+    nx::string_view path;
+    nxe::audio::DecoderPtr (*open)(nx::string_view);
+  };
+  const Clip clips[] = {{"/test_audio.webm", &nxm::video::open_webm_opus},
+                        {"/test_vorbis.webm", &nxm::video::open_webm_vorbis}};
+
+  for (const Clip &clip : clips) {
+    const nxe::audio::DecoderPtr full = clip.open(clip.path);
+    REQUIRE(full != nullptr);
+    const u64 rate = full->format().sample_rate;
+    const u64 total = count_samples(*full);
+    REQUIRE(total > rate); // at least a second to seek within
+
+    const nxe::audio::DecoderPtr dec = clip.open(clip.path);
+    REQUIRE(dec != nullptr);
+    const u64 target = total / 2;
+    REQUIRE(dec->seek(target));
+
+    // Landed near the target: the tail is about (total - target). The tolerance
+    // is a tenth of a second, which covers block alignment and the reset's
+    // convergence region.
+    const u64 remaining = count_samples(*dec);
+    const u64 expected = total - target;
+    CHECK(remaining + rate / 10 > expected);
+    CHECK(remaining < expected + rate / 10);
+
+    // Seeking home restores the whole track.
+    REQUIRE(dec->seek(0));
+    CHECK(count_samples(*dec) + rate / 10 > total);
+  }
 }
 
 TEST_CASE("video pacing: a looping clip never finishes; a plain one does") {

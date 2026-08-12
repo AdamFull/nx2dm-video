@@ -67,17 +67,24 @@ struct Active {
 };
 
 /// A clip's decode and playback state. Simulation-thread only: created and
-/// advanced by the present system, never touched by the renderer. Held behind a
-/// pointer (see m_decoders) so its address is stable: the mixer keeps a pointer
-/// to `audio`, which must not move while a voice is playing it.
+/// advanced by the present system, never touched by the renderer. The stream is
+/// heap-held so a seek can retire it and swap in a fresh one without moving the
+/// object the mixer still points a playing voice at.
 struct Decoder {
   nxe::scene::Entity owner{};
   PacedPlayback playback;
-  nxe::audio::AudioStream audio;
+  nx::unique_ptr<nxe::audio::AudioStream> audio;
   nxe::audio::VoiceHandle voice;
   u64 last_dsp = 0;
   bool audio_started = false;
   bool touched = false;
+};
+
+/// A stream a seek replaced, kept alive until its old voice has drained it - the
+/// audio thread may still be reading its ring.
+struct DyingStream {
+  nx::unique_ptr<nxe::audio::AudioStream> stream;
+  nxe::audio::VoiceHandle voice;
 };
 
 /// A clip's GPU textures. Render-thread only: created, uploaded and destroyed
@@ -158,6 +165,8 @@ public:
           ctx.mixer().stop(d->voice);
       for (nx::unique_ptr<Decoder> &d : m_dying)
         ctx.mixer().stop(d->voice);
+      for (DyingStream &d : m_dying_streams)
+        ctx.mixer().stop(d.voice);
     }
     for (Planes &p : m_planes)
       destroy_planes(ctx.device(), p);
@@ -226,7 +235,8 @@ private:
 
       if (player.seek_to >= 0.0) {
         (void)decoder.playback.seek(player.seek_to);
-        stop_clip_audio(ctx, decoder);
+        if (decoder.audio_started)
+          reseat_audio(ctx, decoder, player, player.seek_to);
         player.seek_to = -1.0;
       }
 
@@ -257,6 +267,7 @@ private:
 
     reap_decoders(ctx);
     sweep_dying(ctx);
+    sweep_dying_streams(ctx);
   }
 
   // The clock the picture is paced against. With sound it is the mixer's DSP
@@ -267,7 +278,7 @@ private:
                                   const f64 dt) {
     if (!decoder.audio_started || !ctx.mixer().valid())
       return dt;
-    decoder.audio.pump();
+    decoder.audio->pump();
     const u32 rate = ctx.mixer().config().sample_rate;
     const u64 now = ctx.mixer().dsp_frame();
     const u64 prev = decoder.last_dsp;
@@ -358,28 +369,37 @@ private:
     return *found;
   }
 
-  // A clip with audio: open the Opus track and hand it to the mixer. The video
-  // then chases the audio clock (see present). Silent clips, and any project
-  // with audio off, skip this and stay on the frame delta.
   void start_audio(nxe::ModuleContext &ctx, Decoder &decoder,
-                   const VideoPlayer &player) {
+                   const VideoPlayer &player, const f64 start_seconds = 0.0) {
     if (player.clip.empty() || !ctx.config().audio || !ctx.mixer().valid())
       return;
     nxe::audio::DecoderPtr codec = open_webm_audio(player.clip);
     if (!codec)
       return;
-    if (!decoder.audio.open(std::move(codec), 1.f, player.looping))
+    if (start_seconds > 0.0 && codec->format().sample_rate != 0)
+      (void)codec->seek(
+          nx::cast<u64>(start_seconds * codec->format().sample_rate));
+    auto stream = nx::make_unique<nxe::audio::AudioStream>();
+    if (!stream->open(std::move(codec), 1.f, player.looping))
       return;
-    decoder.audio.pump(); // prime the ring before the voice starts
-    decoder.voice = ctx.mixer().play(decoder.audio, {});
+    stream->pump(); // prime the ring before the voice starts
+    decoder.audio = std::move(stream);
+    decoder.voice = ctx.mixer().play(*decoder.audio, {});
     decoder.audio_started = true;
     decoder.last_dsp = ctx.mixer().dsp_frame();
   }
 
-  static void stop_clip_audio(nxe::ModuleContext &ctx, Decoder &decoder) {
-    if (decoder.audio_started && ctx.mixer().valid())
+  // Move a playing clip's sound to @p seek_seconds: retire the current stream to
+  // the graveyard, where its voice may still be draining it, and start a fresh
+  // one seeked there. Each stream owns its ring, so the two never share one.
+  void reseat_audio(nxe::ModuleContext &ctx, Decoder &decoder,
+                    const VideoPlayer &player, const f64 seek_seconds) {
+    if (ctx.mixer().valid())
       ctx.mixer().stop(decoder.voice);
+    m_dying_streams.push_back({std::move(decoder.audio), decoder.voice});
+    decoder.voice = {};
     decoder.audio_started = false;
+    start_audio(ctx, decoder, player, seek_seconds);
   }
 
   // Dead entities with a playing voice cannot be freed yet: the audio thread may
@@ -406,6 +426,16 @@ private:
         if (i != m_dying.size() - 1)
           m_dying[i] = std::move(m_dying.back());
         m_dying.pop_back();
+      }
+  }
+
+  void sweep_dying_streams(nxe::ModuleContext &ctx) {
+    const bool mixer_gone = !ctx.mixer().valid();
+    for (usize i = m_dying_streams.size(); i-- > 0;)
+      if (mixer_gone || !ctx.mixer().is_playing(m_dying_streams[i].voice)) {
+        if (i != m_dying_streams.size() - 1)
+          m_dying_streams[i] = std::move(m_dying_streams.back());
+        m_dying_streams.pop_back();
       }
   }
 
@@ -495,6 +525,8 @@ private:
   // Decoders whose entity is gone but whose voice the audio thread may still be
   // rendering. Kept until the mixer says the voice has ended, then dropped.
   nx::vector<nx::unique_ptr<Decoder>> m_dying;
+  // Streams a seek replaced, kept until their old voices drain.
+  nx::vector<DyingStream> m_dying_streams;
   nx::vector<Planes> m_planes;
   u32 m_sampler = 0;
   /// Frames decoded per present tick across all clips; 0 means no cap. Rotated

@@ -148,22 +148,77 @@ public:
   }
 
   [[nodiscard]] bool seek(const u64 frame) noexcept override {
-    // Only a rewind to the start, which is what a loop needs; a scrub to an
-    // arbitrary frame would have to find the enclosing keyframe first.
-    if (frame != 0)
+    if (m_opus == nullptr)
       return false;
     opus_decoder_ctl(m_opus, OPUS_RESET_STATE);
     m_leftover.clear();
     m_leftover_pos = 0;
+    m_frame_index = 0;
+
+    long long block_ns = 0;
+    if (frame != 0) {
+      const long long target = nx::cast<long long>(nx::cast<f64>(frame) /
+                                                   OPUS_RATE * 1e9);
+      if (locate(target, block_ns)) {
+        // Drop from the block's start to the exact target; the decoder converges
+        // over the first few ms after a reset, which the drop mostly hides.
+        const long long block_frame =
+            nx::cast<long long>(nx::cast<f64>(block_ns) * OPUS_RATE / 1e9);
+        m_pre_skip_remaining =
+            nx::cast<u32>(nx::max<long long>(nx::cast<long long>(frame) -
+                                             block_frame, 0));
+        return true;
+      }
+    }
+    // Frame zero, or a target before the first block: play from the start,
+    // honouring the encoder's own pre-skip again.
     m_pre_skip_remaining = m_pre_skip;
     m_block = nullptr;
-    m_frame_index = 0;
     m_entry = nullptr;
     m_cluster = m_segment != nullptr ? m_segment->GetFirst() : nullptr;
     return true;
   }
 
 private:
+  bool locate(const long long target_ns, long long &block_ns) {
+    const mkvparser::Cluster *fc = nullptr;
+    const mkvparser::BlockEntry *fe = nullptr;
+    const mkvparser::Block *fb = nullptr;
+    long long ft = 0;
+    bool passed = false;
+    for (const mkvparser::Cluster *cluster = m_segment->GetFirst();
+         cluster != nullptr && !cluster->EOS() && !passed;
+         cluster = m_segment->GetNext(cluster)) {
+      const mkvparser::BlockEntry *entry = nullptr;
+      long status = cluster->GetFirst(entry);
+      while (status >= 0 && entry != nullptr && !entry->EOS()) {
+        const mkvparser::Block *const block = entry->GetBlock();
+        if (block != nullptr && block->GetTrackNumber() == m_track_number) {
+          const long long t = block->GetTime(cluster);
+          if (t > target_ns) {
+            passed = true;
+            break;
+          }
+          fc = cluster;
+          fe = entry;
+          fb = block;
+          ft = t;
+        }
+        const mkvparser::BlockEntry *next = nullptr;
+        status = cluster->GetNext(entry, next);
+        entry = next;
+      }
+    }
+    if (fb == nullptr)
+      return false;
+    m_cluster = fc;
+    m_entry = fe;
+    m_block = fb;
+    m_frame_index = 0;
+    block_ns = ft;
+    return true;
+  }
+
   // Decodes the next Opus packet into m_leftover. False only at end of stream;
   // a packet that fails to decode is skipped with m_leftover left empty, so the
   // caller's loop pulls the next one.
@@ -357,22 +412,72 @@ public:
   }
 
   [[nodiscard]] bool seek(const u64 frame) noexcept override {
-    // Rewind only, which is what a loop needs; a scrub would have to walk the
-    // granule positions to the target block first.
-    if (frame != 0)
-      return false;
     if (m_synth_ready)
       vorbis_synthesis_restart(&m_vd);
     m_leftover.clear();
     m_leftover_pos = 0;
-    m_block = nullptr;
     m_frame_index = 0;
+
+    long long block_ns = 0;
+    if (frame != 0 && m_format.sample_rate != 0) {
+      const long long target = nx::cast<long long>(
+          nx::cast<f64>(frame) / m_format.sample_rate * 1e9);
+      if (locate(target, block_ns)) {
+        const long long block_frame = nx::cast<long long>(
+            nx::cast<f64>(block_ns) * m_format.sample_rate / 1e9);
+        m_drop = nx::cast<u64>(
+            nx::max<long long>(nx::cast<long long>(frame) - block_frame, 0));
+        return true;
+      }
+    }
+    m_drop = 0;
+    m_block = nullptr;
     m_entry = nullptr;
     m_cluster = m_segment != nullptr ? m_segment->GetFirst() : nullptr;
     return true;
   }
 
 private:
+  // As the Opus decoder's, over this track's blocks.
+  bool locate(const long long target_ns, long long &block_ns) {
+    const mkvparser::Cluster *fc = nullptr;
+    const mkvparser::BlockEntry *fe = nullptr;
+    const mkvparser::Block *fb = nullptr;
+    long long ft = 0;
+    bool passed = false;
+    for (const mkvparser::Cluster *cluster = m_segment->GetFirst();
+         cluster != nullptr && !cluster->EOS() && !passed;
+         cluster = m_segment->GetNext(cluster)) {
+      const mkvparser::BlockEntry *entry = nullptr;
+      long status = cluster->GetFirst(entry);
+      while (status >= 0 && entry != nullptr && !entry->EOS()) {
+        const mkvparser::Block *const block = entry->GetBlock();
+        if (block != nullptr && block->GetTrackNumber() == m_track_number) {
+          const long long t = block->GetTime(cluster);
+          if (t > target_ns) {
+            passed = true;
+            break;
+          }
+          fc = cluster;
+          fe = entry;
+          fb = block;
+          ft = t;
+        }
+        const mkvparser::BlockEntry *next = nullptr;
+        status = cluster->GetNext(entry, next);
+        entry = next;
+      }
+    }
+    if (fb == nullptr)
+      return false;
+    m_cluster = fc;
+    m_entry = fe;
+    m_block = fb;
+    m_frame_index = 0;
+    block_ns = ft;
+    return true;
+  }
+
   bool read_headers(const mkvparser::AudioTrack &audio) {
     size_t size = 0;
     const unsigned char *const priv = audio.GetCodecPrivate(size);
@@ -436,12 +541,18 @@ private:
     m_leftover_pos = 0;
     float **pcm = nullptr;
     for (int got; (got = vorbis_synthesis_pcmout(&m_vd, &pcm)) > 0;) {
+      // A seek lands on a block start; drop the frames between it and the target.
+      int start = 0;
+      if (m_drop > 0) {
+        start = nx::cast<int>(nx::min<u64>(m_drop, nx::cast<u64>(got)));
+        m_drop -= nx::cast<u64>(start);
+      }
       const usize base = m_leftover.size();
-      m_leftover.resize(base + nx::cast<usize>(got) * ch);
-      for (int i = 0; i < got; ++i)
+      m_leftover.resize(base + nx::cast<usize>(got - start) * ch);
+      for (int i = start; i < got; ++i)
         for (u32 c = 0; c < ch; ++c) {
           const float s = nx::clamp(pcm[c][i], -1.f, 1.f);
-          m_leftover[base + nx::cast<usize>(i) * ch + c] =
+          m_leftover[base + nx::cast<usize>(i - start) * ch + c] =
               nx::cast<i16>(s * 32767.f);
         }
       vorbis_synthesis_read(&m_vd, got);
@@ -510,6 +621,7 @@ private:
 
   nxe::audio::SoundFormat m_format;
   long long m_track_number = 0;
+  u64 m_drop = 0; // frames to discard after a seek, from the block start to it
   nx::vector<u8> m_packet;
   nx::vector<i16> m_leftover;
   usize m_leftover_pos = 0;
