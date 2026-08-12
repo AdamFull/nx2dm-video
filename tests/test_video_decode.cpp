@@ -33,6 +33,37 @@ struct MountedFixtures {
   MountedFixtures &operator=(const MountedFixtures &) = delete;
 };
 
+/// A source that counts how many frames were pulled from it, so a budget cap
+/// can be measured rather than inferred. Endless, so it never ends on its own.
+class CountingSource final : public nxm::video::FrameSource {
+public:
+  explicit CountingSource(const f64 fps) noexcept : m_fps(fps) {}
+
+  [[nodiscard]] u32 width() const noexcept override { return 4; }
+  [[nodiscard]] u32 height() const noexcept override { return 4; }
+  [[nodiscard]] f64 frame_rate() const noexcept override { return m_fps; }
+
+  [[nodiscard]] bool next(nxm::video::VideoFrame &out) override {
+    ++decodes;
+    out.width = 4;
+    out.height = 4;
+    out.y_pitch = 4;
+    out.c_pitch = 2;
+    out.pts = nx::cast<f64>(m_frame++) / m_fps;
+    out.y.assign(16, 0);
+    out.cb.assign(4, 128);
+    out.cr.assign(4, 128);
+    return true;
+  }
+  void restart() override { m_frame = 0; }
+
+  int decodes = 0;
+
+private:
+  f64 m_fps;
+  u64 m_frame = 0;
+};
+
 [[nodiscard]] int decode_all(nxm::video::FrameSource &src) {
   nxm::video::VideoFrame frame;
   int count = 0;
@@ -116,6 +147,46 @@ TEST_CASE("video pacing: the frame shown is the one the clock has reached") {
   REQUIRE(g != nullptr);
   CHECK(g->pts > 0.29);
   CHECK(g->pts < 0.31);
+}
+
+TEST_CASE("video budget: a decode cap holds decodes and catches up over calls") {
+  auto src = std::make_unique<CountingSource>(60.0);
+  CountingSource *const raw = src.get();
+  nxm::video::PacedPlayback pacer;
+  pacer.reset(std::move(src), false);
+
+  // Prime uncapped: the first frame and its successor, two decodes.
+  REQUIRE(pacer.advance(0.0, nullptr) != nullptr);
+  const int primed = raw->decodes;
+
+  // One second is 60 frames due; a budget of 3 decodes at most three of them.
+  i32 budget = 3;
+  const nxm::video::VideoFrame *f = pacer.advance(1.0, &budget);
+  REQUIRE(f != nullptr);
+  CHECK(raw->decodes - primed == 3);
+  CHECK(budget == 0);
+  CHECK(f->pts < 0.1); // a few frames in, nowhere near the whole second
+
+  // The clock is already a second in; a further budgeted call keeps catching up
+  // rather than stalling, which is what keeps a starved clip moving.
+  const f64 before = f->pts;
+  i32 more = 3;
+  f = pacer.advance(0.0, &more);
+  REQUIRE(f != nullptr);
+  CHECK(f->pts > before);
+}
+
+TEST_CASE("video budget: no cap catches up to the clock in one call") {
+  auto src = std::make_unique<CountingSource>(60.0);
+  CountingSource *const raw = src.get();
+  nxm::video::PacedPlayback pacer;
+  pacer.reset(std::move(src), false);
+  REQUIRE(pacer.advance(0.0, nullptr) != nullptr);
+
+  const nxm::video::VideoFrame *f = pacer.advance(1.0, nullptr);
+  REQUIRE(f != nullptr);
+  CHECK(f->pts > 0.9); // reached the frame a full second in
+  CHECK(raw->decodes > 50);
 }
 
 TEST_CASE("video audio: the Opus track decodes to 48 kHz PCM, and has sound") {

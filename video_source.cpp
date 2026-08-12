@@ -52,51 +52,71 @@ void PacedPlayback::reset(SourcePtr source, const bool looping) {
   m_has_current = false;
   m_has_next = false;
   m_finished = false;
+  m_eos = false;
 }
 
-bool PacedPlayback::prime() {
-  if (!m_source->next(m_current)) {
-    m_finished = true;
-    return false;
-  }
-  m_has_current = true;
-  // Do not run the clock ahead of the first frame: a source whose first PTS is
-  // not zero should still show frame one before anything is dropped.
-  if (m_clock < m_current.pts)
-    m_clock = m_current.pts;
-  m_has_next = m_source->next(m_next);
-  return true;
-}
-
-const VideoFrame *PacedPlayback::advance(const f64 dt) {
+const VideoFrame *PacedPlayback::advance(const f64 dt, i32 *const budget) {
   if (m_source == nullptr)
     return nullptr;
 
   m_clock += dt;
-  if (!m_has_current && !prime())
-    return nullptr;
+
+  const auto avail = [&] { return budget == nullptr || *budget > 0; };
+  const auto spend = [&] {
+    if (budget != nullptr && *budget > 0)
+      --*budget;
+  };
 
   for (;;) {
-    // Catch up to the clock, dropping every frame it has already passed.
-    while (m_has_next && m_next.pts <= m_clock) {
-      std::swap(m_current, m_next);
-      m_has_next = m_source->next(m_next);
+    if (!m_has_current) {
+      if (!avail())
+        return nullptr; // not primed and no budget: nothing to show yet
+      spend();
+      if (!m_source->next(m_current)) {
+        m_eos = true;
+        m_finished = true;
+        return nullptr;
+      }
+      m_has_current = true;
+      // Do not run the clock ahead of the first frame: a non-zero opening PTS
+      // should still show frame one before anything is dropped.
+      if (m_clock < m_current.pts)
+        m_clock = m_current.pts;
+      continue;
     }
-    if (m_has_next)
-      break; // the next frame is in hand and not yet due
 
-    // Decode reached the end of the stream.
+    if (!m_has_next && !m_eos) {
+      if (!avail())
+        break; // hold the current frame; refill once budget frees
+      spend();
+      if (m_source->next(m_next))
+        m_has_next = true;
+      else
+        m_eos = true;
+    }
+
+    // Drop a frame the clock has already passed; its replacement decodes on the
+    // next turn of the loop.
+    if (m_has_next && m_next.pts <= m_clock) {
+      std::swap(m_current, m_next);
+      m_has_next = false;
+      continue;
+    }
+
+    if (m_has_next || !m_eos)
+      break; // future frame in hand, or a decode merely deferred for budget
+
     if (!m_looping) {
       m_finished = true; // hold the last frame
       break;
     }
-    // Loop: restart the timeline from the opening keyframe. The clock resets, so
-    // the wrap costs at most one frame of drift, which no one sees.
+    // Loop: restart from the opening keyframe. The clock resets, so the wrap
+    // costs at most one frame of drift, which no one sees.
     m_source->restart();
     m_clock = 0.0;
     m_has_current = false;
-    if (!prime())
-      return nullptr;
+    m_has_next = false;
+    m_eos = false;
   }
 
   return m_has_current ? &m_current : nullptr;

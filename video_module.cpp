@@ -20,6 +20,7 @@
 #include "core/scene/scene_json.h"
 
 #include "core/foundation/containers/blob.h"
+#include "core/foundation/containers/small_vector.h"
 #include "core/foundation/core/foundation.h"
 #include "core/foundation/diagnostics/log.h"
 
@@ -57,6 +58,11 @@ struct VideoItem {
 struct VideoChannel {
   nx::vector<VideoItem> items;
   void clear() { items.clear(); }
+};
+
+struct Active {
+  nxe::scene::Entity entity{};
+  VideoPlayer *player = nullptr;
 };
 
 /// A clip's decode and playback state. Simulation-thread only: created and
@@ -177,6 +183,7 @@ private:
         cam_eye = glm::vec2(w->world[2][0], w->world[2][1]);
     }
 
+    nx::small_vector<Active, 8> active;
     ctx.scene().registry().view<VideoPlayer>().each(
         [&](const nxe::scene::Entity entity, VideoPlayer &player) {
           // Stopped: leave any decoder untouched so reap releases it (and its
@@ -185,43 +192,55 @@ private:
             player.finished = false;
             return;
           }
-          Decoder &decoder = decoder_for(entity);
-          if (!decoder.playback.valid()) {
-            SourcePtr source;
-            if (!player.clip.empty())
-              source = open_webm(player.clip);
-            // No clip, or the file would not open: the synthetic pattern keeps
-            // the pipeline exercised rather than drawing nothing.
-            if (!source)
-              source = std::make_unique<SyntheticSource>(SYNTH_WIDTH,
-                                                         SYNTH_HEIGHT,
-                                                         SYNTH_FPS);
-            decoder.playback.reset(std::move(source), player.looping);
-            if (m_audio_enabled)
-              start_audio(ctx, decoder, player);
-          }
-
-          const f64 step = advance_clock(ctx, decoder, dt);
-          const VideoFrame *const frame = decoder.playback.advance(step);
-          player.finished = decoder.playback.finished();
-          if (frame == nullptr)
-            return;
-
-          VideoItem item;
-          item.owner = entity;
-          item.world_space = player.world_space;
-          if (player.world_space) {
-            item.rect = player.rect; // world-space AABB; the pass projects it
-            item.eye = cam_eye;
-            item.half_h = cam_half_h;
-          } else {
-            item.rect = player.fullscreen ? glm::vec4{-1.f, -1.f, 1.f, 1.f}
-                                          : player.rect;
-          }
-          item.pts = frame->pts;
-          item.frame = *frame; // copied into the per-frame packet, race-free
-          channel.items.push_back(std::move(item));
+          active.push_back({entity, &player});
         });
+
+    // One shared budget across the clips, handed out in a rotating order so no
+    // clip is starved when several want to decode the same frame.
+    i32 remaining = nx::cast<i32>(m_decode_budget);
+    i32 *const budget = m_decode_budget > 0 ? &remaining : nullptr;
+    const usize count = active.size();
+    for (usize k = 0; k < count; ++k) {
+      const Active &a = active[(m_decode_cursor + k) % count];
+      VideoPlayer &player = *a.player;
+      Decoder &decoder = decoder_for(a.entity);
+      if (!decoder.playback.valid()) {
+        SourcePtr source;
+        if (!player.clip.empty())
+          source = open_webm(player.clip);
+        // No clip, or the file would not open: the synthetic pattern keeps the
+        // pipeline exercised rather than drawing nothing.
+        if (!source)
+          source = std::make_unique<SyntheticSource>(SYNTH_WIDTH, SYNTH_HEIGHT,
+                                                     SYNTH_FPS);
+        decoder.playback.reset(std::move(source), player.looping);
+        if (m_audio_enabled)
+          start_audio(ctx, decoder, player);
+      }
+
+      const f64 step = advance_clock(ctx, decoder, dt);
+      const VideoFrame *const frame = decoder.playback.advance(step, budget);
+      player.finished = decoder.playback.finished();
+      if (frame == nullptr)
+        continue;
+
+      VideoItem item;
+      item.owner = a.entity;
+      item.world_space = player.world_space;
+      if (player.world_space) {
+        item.rect = player.rect; // world-space AABB; the pass projects it
+        item.eye = cam_eye;
+        item.half_h = cam_half_h;
+      } else {
+        item.rect = player.fullscreen ? glm::vec4{-1.f, -1.f, 1.f, 1.f}
+                                      : player.rect;
+      }
+      item.pts = frame->pts;
+      item.frame = *frame; // copied into the per-frame packet, race-free
+      channel.items.push_back(std::move(item));
+    }
+    if (count != 0)
+      ++m_decode_cursor;
 
     reap_decoders(ctx);
     sweep_dying(ctx);
@@ -459,6 +478,10 @@ private:
   nx::vector<nx::unique_ptr<Decoder>> m_dying;
   nx::vector<Planes> m_planes;
   u32 m_sampler = 0;
+  /// Frames decoded per present tick across all clips; 0 means no cap. Rotated
+  /// over by m_decode_cursor so the budget reaches every clip in turn.
+  u32 m_decode_budget = 0;
+  u32 m_decode_cursor = 0;
   bool m_can_draw = false;
   bool m_audio_enabled = true;
 };

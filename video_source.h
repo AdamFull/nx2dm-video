@@ -85,12 +85,9 @@ public:
   [[nodiscard]] bool finished() const noexcept { return m_finished; }
 
   /// Advances the clock by @p dt seconds and returns the frame to show now, or
-  /// null before the first frame has decoded.
-  [[nodiscard]] const VideoFrame *advance(f64 dt);
+  [[nodiscard]] const VideoFrame *advance(f64 dt, i32 *budget = nullptr);
 
 private:
-  [[nodiscard]] bool prime();
-
   SourcePtr m_source;
   VideoFrame m_current;
   VideoFrame m_next;
@@ -99,6 +96,7 @@ private:
   bool m_has_next = false;
   bool m_looping = false;
   bool m_finished = false;
+  bool m_eos = false;
 };
 
 } // namespace nxm::video
