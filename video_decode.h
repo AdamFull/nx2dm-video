@@ -13,4 +13,6 @@ namespace nxm::video {
 
 [[nodiscard]] SourcePtr open_webm(nx::string_view path);
 
+[[nodiscard]] bool webm_is_vp9(nx::string_view path);
+
 } // namespace nxm::video

@@ -9,6 +9,8 @@
 #include "vpx/vpx_decoder.h"
 #include "vpx/vpx_image.h"
 
+#include "gav1/decoder.h"
+
 #include <cstring>
 
 namespace nxm::video {
@@ -48,19 +50,15 @@ void copy_plane(u8 *dst, const u32 dst_pitch, const u8 *src, const int src_pitch
                 src + nx::cast<usize>(row) * nx::cast<u32>(src_pitch), width);
 }
 
-class WebmVp9Source final : public FrameSource {
+class WebmVideoDemux {
 public:
-  WebmVp9Source() = default;
-  ~WebmVp9Source() override {
-    if (m_decoder_ready)
-      vpx_codec_destroy(&m_codec);
-    delete m_segment;
-  }
+  WebmVideoDemux() = default;
+  ~WebmVideoDemux() { delete m_segment; }
+  WebmVideoDemux(const WebmVideoDemux &) = delete;
+  WebmVideoDemux &operator=(const WebmVideoDemux &) = delete;
 
-  WebmVp9Source(const WebmVp9Source &) = delete;
-  WebmVp9Source &operator=(const WebmVp9Source &) = delete;
-
-  [[nodiscard]] bool open(nx::string_view path) {
+  [[nodiscard]] bool open(const nx::string_view path, const char *const codec_id,
+                          const char *const codec_id_alt = nullptr) {
     auto bytes = nx::vfs::read(nx::vfs::path_view(path));
     if (!bytes) {
       nx::logw("video: cannot read '{}'", path);
@@ -85,75 +83,42 @@ public:
     for (unsigned long i = 0; tracks != nullptr && i < tracks->GetTracksCount();
          ++i) {
       const mkvparser::Track *const track = tracks->GetTrackByIndex(i);
-      if (track != nullptr &&
-          track->GetType() == mkvparser::Track::kVideo &&
-          track->GetCodecId() != nullptr &&
-          std::strcmp(track->GetCodecId(), "V_VP9") == 0) {
+      const char *const cid =
+          track != nullptr ? track->GetCodecId() : nullptr;
+      if (track != nullptr && track->GetType() == mkvparser::Track::kVideo &&
+          cid != nullptr &&
+          (std::strcmp(cid, codec_id) == 0 ||
+           (codec_id_alt != nullptr && std::strcmp(cid, codec_id_alt) == 0))) {
         video = static_cast<const mkvparser::VideoTrack *>(track);
         break;
       }
     }
-    if (video == nullptr) {
-      nx::logw("video: '{}' has no VP9 track", path);
+    if (video == nullptr)
       return false;
-    }
     m_track_number = video->GetNumber();
     m_width = nx::cast<u32>(video->GetWidth());
     m_height = nx::cast<u32>(video->GetHeight());
     m_fps = video->GetFrameRate();
     if (m_fps <= 0.0)
       m_fps = 30.0;
-
-    if (vpx_codec_dec_init(&m_codec, vpx_codec_vp9_dx(), nullptr, 0) !=
-        VPX_CODEC_OK) {
-      nx::logw("video: cannot init VP9 decoder for '{}'", path);
-      return false;
-    }
-    m_decoder_ready = true;
     m_cluster = m_segment->GetFirst();
-    nx::logi("video: '{}' VP9 {}x{}", path, m_width, m_height);
     return true;
   }
 
-  [[nodiscard]] u32 width() const noexcept override { return m_width; }
-  [[nodiscard]] u32 height() const noexcept override { return m_height; }
-  [[nodiscard]] f64 frame_rate() const noexcept override { return m_fps; }
+  [[nodiscard]] u32 width() const noexcept { return m_width; }
+  [[nodiscard]] u32 height() const noexcept { return m_height; }
+  [[nodiscard]] f64 frame_rate() const noexcept { return m_fps; }
 
-  [[nodiscard]] bool next(VideoFrame &out) override {
-    for (;;) {
-      // Drain frames the last packet produced before decoding another: one
-      // decode can yield more than one showable image.
-      if (vpx_image_t *const img = vpx_codec_get_frame(&m_codec, &m_iter)) {
-        return fill(out, img);
-      }
-      m_iter = nullptr;
-
-      const u8 *data = nullptr;
-      long len = 0;
-      f64 pts = 0.0;
-      if (!pull_video_frame(data, len, pts))
-        return false;
-
-      m_last_pts = pts;
-      if (vpx_codec_decode(&m_codec, data, nx::cast<unsigned int>(len), nullptr,
-                           0) != VPX_CODEC_OK) {
-        nx::logw("video: decode error: {}", vpx_codec_error(&m_codec));
-        // Skip the bad packet rather than ending the stream.
-        continue;
-      }
-    }
-  }
-
-  void restart() override {
-    // VP9 can only resume from a keyframe, which the first cluster begins with,
-    // so a clean seek to start is a decoder reset plus a cursor rewind.
-    reset_decoder();
+  void restart() {
     m_entry = nullptr;
     m_at_entry = false;
     m_cluster = m_segment != nullptr ? m_segment->GetFirst() : nullptr;
   }
 
-  [[nodiscard]] bool seek(const f64 target_seconds) override {
+  // Reposition to the keyframe at or before @p target seconds; the codec reset
+  // is the caller's, since it owns the decoder. False only if there is no
+  // segment.
+  [[nodiscard]] bool seek(const f64 target_seconds) {
     if (m_segment == nullptr)
       return false;
     const long long target_ns =
@@ -189,55 +154,15 @@ public:
       restart(); // target before the first keyframe: the start is the answer
       return true;
     }
-
-    reset_decoder();
     m_cluster = key_cluster;
     m_entry = key_entry;
-    m_at_entry = true; // pull_video_frame decodes this block before advancing
-    return m_decoder_ready;
-  }
-
-private:
-  void reset_decoder() {
-    if (m_decoder_ready) {
-      vpx_codec_destroy(&m_codec);
-      m_decoder_ready =
-          vpx_codec_dec_init(&m_codec, vpx_codec_vp9_dx(), nullptr, 0) ==
-          VPX_CODEC_OK;
-    }
-    m_iter = nullptr;
-  }
-
-  [[nodiscard]] bool fill(VideoFrame &out, const vpx_image_t *img) {
-    if (img->fmt != VPX_IMG_FMT_I420) {
-      nx::logw("video: unsupported pixel format {:#x}",
-               nx::cast<u32>(img->fmt));
-      return false;
-    }
-    const u32 w = img->d_w;
-    const u32 h = img->d_h;
-    const u32 cw = (w + 1) / 2;
-    const u32 ch = (h + 1) / 2;
-    out.width = w;
-    out.height = h;
-    out.y_pitch = w;
-    out.c_pitch = cw;
-    out.pts = m_last_pts;
-    out.y.resize(nx::cast<usize>(w) * h);
-    out.cb.resize(nx::cast<usize>(cw) * ch);
-    out.cr.resize(nx::cast<usize>(cw) * ch);
-    copy_plane(out.y.data(), w, img->planes[VPX_PLANE_Y],
-               img->stride[VPX_PLANE_Y], w, h);
-    copy_plane(out.cb.data(), cw, img->planes[VPX_PLANE_U],
-               img->stride[VPX_PLANE_U], cw, ch);
-    copy_plane(out.cr.data(), cw, img->planes[VPX_PLANE_V],
-               img->stride[VPX_PLANE_V], cw, ch);
+    m_at_entry = true; // next() decodes this block before advancing
     return true;
   }
 
-  // Advances the cluster/block cursor to the next block on the video track and
-  // reads its (single) frame into m_frame. False at end of stream.
-  [[nodiscard]] bool pull_video_frame(const u8 *&data, long &len, f64 &pts) {
+  // Reads the next block's (single) frame on the video track into an internal
+  // buffer, valid until the following call. False at end of stream.
+  [[nodiscard]] bool next(const u8 *&data, long &len, f64 &pts) {
     while (m_cluster != nullptr && !m_cluster->EOS()) {
       long status = 0;
       if (m_at_entry) {
@@ -274,32 +199,234 @@ private:
     return false;
   }
 
+private:
   nx::blob<u8> m_bytes;
   MemoryReader m_reader{nullptr, 0};
   mkvparser::Segment *m_segment = nullptr;
   const mkvparser::Cluster *m_cluster = nullptr;
   const mkvparser::BlockEntry *m_entry = nullptr;
   bool m_at_entry = false;
-
-  vpx_codec_ctx_t m_codec{};
-  vpx_codec_iter_t m_iter = nullptr;
-  bool m_decoder_ready = false;
-
   nx::vector<u8> m_frame;
   long long m_track_number = 0;
   u32 m_width = 0;
   u32 m_height = 0;
   f64 m_fps = 30.0;
+};
+
+void fill_i420(VideoFrame &out, const u32 w, const u32 h, const u32 cw,
+               const u32 ch, const f64 pts, const u8 *y, const int y_stride,
+               const u8 *cb, const int cb_stride, const u8 *cr,
+               const int cr_stride) {
+  out.width = w;
+  out.height = h;
+  out.y_pitch = w;
+  out.c_pitch = cw;
+  out.pts = pts;
+  out.y.resize(nx::cast<usize>(w) * h);
+  out.cb.resize(nx::cast<usize>(cw) * ch);
+  out.cr.resize(nx::cast<usize>(cw) * ch);
+  copy_plane(out.y.data(), w, y, y_stride, w, h);
+  copy_plane(out.cb.data(), cw, cb, cb_stride, cw, ch);
+  copy_plane(out.cr.data(), cw, cr, cr_stride, cw, ch);
+}
+
+class WebmVp9Source final : public FrameSource {
+public:
+  WebmVp9Source() = default;
+  ~WebmVp9Source() override {
+    if (m_ready)
+      vpx_codec_destroy(&m_codec);
+  }
+  WebmVp9Source(const WebmVp9Source &) = delete;
+  WebmVp9Source &operator=(const WebmVp9Source &) = delete;
+
+  [[nodiscard]] bool open(const nx::string_view path) {
+    if (!m_demux.open(path, "V_VP9"))
+      return false;
+    if (vpx_codec_dec_init(&m_codec, vpx_codec_vp9_dx(), nullptr, 0) !=
+        VPX_CODEC_OK) {
+      nx::logw("video: cannot init VP9 decoder for '{}'", path);
+      return false;
+    }
+    m_ready = true;
+    nx::logi("video: '{}' VP9 {}x{}", path, m_demux.width(), m_demux.height());
+    return true;
+  }
+
+  [[nodiscard]] u32 width() const noexcept override { return m_demux.width(); }
+  [[nodiscard]] u32 height() const noexcept override { return m_demux.height(); }
+  [[nodiscard]] f64 frame_rate() const noexcept override {
+    return m_demux.frame_rate();
+  }
+
+  [[nodiscard]] bool next(VideoFrame &out) override {
+    for (;;) {
+      // One decode can yield more than one showable image; drain them first.
+      if (vpx_image_t *const img = vpx_codec_get_frame(&m_codec, &m_iter))
+        return fill(out, img);
+      m_iter = nullptr;
+
+      const u8 *data = nullptr;
+      long len = 0;
+      f64 pts = 0.0;
+      if (!m_demux.next(data, len, pts))
+        return false;
+      m_last_pts = pts;
+      if (vpx_codec_decode(&m_codec, data, nx::cast<unsigned int>(len), nullptr,
+                           0) != VPX_CODEC_OK) {
+        nx::logw("video: VP9 decode error: {}", vpx_codec_error(&m_codec));
+        continue; // skip the bad packet rather than ending the stream
+      }
+    }
+  }
+
+  void restart() override {
+    reset_decoder();
+    m_demux.restart();
+  }
+
+  [[nodiscard]] bool seek(const f64 target_seconds) override {
+    if (!m_demux.seek(target_seconds))
+      return false;
+    reset_decoder();
+    return m_ready;
+  }
+
+private:
+  void reset_decoder() {
+    if (m_ready) {
+      vpx_codec_destroy(&m_codec);
+      m_ready = vpx_codec_dec_init(&m_codec, vpx_codec_vp9_dx(), nullptr, 0) ==
+                VPX_CODEC_OK;
+    }
+    m_iter = nullptr;
+  }
+
+  [[nodiscard]] bool fill(VideoFrame &out, const vpx_image_t *img) {
+    if (img->fmt != VPX_IMG_FMT_I420) {
+      nx::logw("video: unsupported pixel format {:#x}", nx::cast<u32>(img->fmt));
+      return false;
+    }
+    fill_i420(out, img->d_w, img->d_h, (img->d_w + 1) / 2, (img->d_h + 1) / 2,
+              m_last_pts, img->planes[VPX_PLANE_Y], img->stride[VPX_PLANE_Y],
+              img->planes[VPX_PLANE_U], img->stride[VPX_PLANE_U],
+              img->planes[VPX_PLANE_V], img->stride[VPX_PLANE_V]);
+    return true;
+  }
+
+  WebmVideoDemux m_demux;
+  vpx_codec_ctx_t m_codec{};
+  vpx_codec_iter_t m_iter = nullptr;
+  bool m_ready = false;
+  f64 m_last_pts = 0.0;
+};
+
+class WebmAv1Source final : public FrameSource {
+public:
+  WebmAv1Source() = default;
+  WebmAv1Source(const WebmAv1Source &) = delete;
+  WebmAv1Source &operator=(const WebmAv1Source &) = delete;
+
+  [[nodiscard]] bool open(const nx::string_view path) {
+    // "V_AV01" is the Matroska codec id; some muxers (ffmpeg among them) write
+    // "V_AV1" instead, so accept either.
+    if (!m_demux.open(path, "V_AV01", "V_AV1"))
+      return false;
+    libgav1::DecoderSettings settings;
+    settings.threads = 1;
+    if (m_decoder.Init(&settings) != libgav1::kStatusOk) {
+      nx::logw("video: cannot init AV1 decoder for '{}'", path);
+      return false;
+    }
+    nx::logi("video: '{}' AV1 {}x{}", path, m_demux.width(), m_demux.height());
+    return true;
+  }
+
+  [[nodiscard]] u32 width() const noexcept override { return m_demux.width(); }
+  [[nodiscard]] u32 height() const noexcept override { return m_demux.height(); }
+  [[nodiscard]] f64 frame_rate() const noexcept override {
+    return m_demux.frame_rate();
+  }
+
+  [[nodiscard]] bool next(VideoFrame &out) override {
+    for (;;) {
+      const u8 *data = nullptr;
+      long len = 0;
+      f64 pts = 0.0;
+      if (!m_demux.next(data, len, pts))
+        return false;
+
+      // libgav1 keeps no copy: `data` (owned by the demux) must live until the
+      // matching DequeueFrame, which the very next line does.
+      if (m_decoder.EnqueueFrame(data, nx::cast<size_t>(len), 0, nullptr) !=
+          libgav1::kStatusOk) {
+        nx::logw("video: AV1 enqueue error");
+        continue;
+      }
+      const libgav1::DecoderBuffer *buf = nullptr;
+      if (m_decoder.DequeueFrame(&buf) != libgav1::kStatusOk) {
+        nx::logw("video: AV1 decode error");
+        continue;
+      }
+      if (buf == nullptr)
+        continue; // a decode-only frame (e.g. an altref): pull the next
+      m_last_pts = pts;
+      return fill(out, *buf);
+    }
+  }
+
+  void restart() override {
+    m_decoder.SignalEOS();
+    m_demux.restart();
+  }
+
+  [[nodiscard]] bool seek(const f64 target_seconds) override {
+    if (!m_demux.seek(target_seconds))
+      return false;
+    m_decoder.SignalEOS();
+    return true;
+  }
+
+private:
+  [[nodiscard]] bool fill(VideoFrame &out, const libgav1::DecoderBuffer &buf) {
+    if (buf.image_format != libgav1::kImageFormatYuv420 || buf.bitdepth != 8) {
+      nx::logw("video: unsupported AV1 format {}/{}bit",
+               nx::cast<i32>(buf.image_format), buf.bitdepth);
+      return false;
+    }
+    fill_i420(out, nx::cast<u32>(buf.displayed_width[0]),
+              nx::cast<u32>(buf.displayed_height[0]),
+              nx::cast<u32>(buf.displayed_width[1]),
+              nx::cast<u32>(buf.displayed_height[1]), m_last_pts, buf.plane[0],
+              buf.stride[0], buf.plane[1], buf.stride[1], buf.plane[2],
+              buf.stride[2]);
+    return true;
+  }
+
+  WebmVideoDemux m_demux;
+  libgav1::Decoder m_decoder;
   f64 m_last_pts = 0.0;
 };
 
 } // namespace
 
 SourcePtr open_webm(const nx::string_view path) {
-  auto source = std::make_unique<WebmVp9Source>();
-  if (!source->open(path))
-    return nullptr;
-  return source;
+  // Whichever codec the file's video track carries. Each source's open()
+  // declines a file whose track is not its codec, so trying VP9 then AV1 picks
+  // the right one without demuxing twice up front.
+  auto vp9 = std::make_unique<WebmVp9Source>();
+  if (vp9->open(path))
+    return vp9;
+  auto av1 = std::make_unique<WebmAv1Source>();
+  if (av1->open(path))
+    return av1;
+  nx::logw("video: '{}' has no VP9 or AV1 track", path);
+  return nullptr;
+}
+
+bool webm_is_vp9(const nx::string_view path) {
+  WebmVideoDemux demux;
+  return demux.open(path, "V_VP9");
 }
 
 } // namespace nxm::video

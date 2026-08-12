@@ -112,6 +112,46 @@ TEST_CASE("video decode: a VP9 webm opens at its true size") {
   CHECK(src->frame_rate() > 0.0);
 }
 
+TEST_CASE("video decode: the codec peek tells VP9 from AV1 (hw path gate)") {
+  const MountedFixtures fixtures;
+  REQUIRE(fixtures.ok);
+  // The module uses this to keep AV1 off the VP9-only hardware path.
+  CHECK(nxm::video::webm_is_vp9("/test.webm"));
+  CHECK_FALSE(nxm::video::webm_is_vp9("/test_av1.webm"));
+  CHECK_FALSE(nxm::video::webm_is_vp9("/nope.webm"));
+}
+
+TEST_CASE("video decode: an AV1 webm decodes through the same FrameSource") {
+  const MountedFixtures fixtures;
+  REQUIRE(fixtures.ok);
+
+  // open_webm dispatches on the track codec: this file is AV1, so it comes back
+  // a libgav1-backed source, indistinguishable to the caller from the VP9 one.
+  const nxm::video::SourcePtr src = nxm::video::open_webm("/test_av1.webm");
+  REQUIRE(src != nullptr);
+  CHECK(src->width() == 320);
+  CHECK(src->height() == 240);
+  CHECK(src->frame_rate() > 0.0);
+
+  nxm::video::VideoFrame first;
+  REQUIRE(src->next(first));
+  CHECK(first.width == 320);
+  CHECK(first.height == 240);
+  CHECK(first.y.size() == 320u * 240u);
+  CHECK(first.cb.size() == 160u * 120u);
+  // The test pattern is strongly coloured, so a real decode is not flat grey.
+  bool varies = false;
+  for (usize i = 1; i < first.y.size() && !varies; ++i)
+    varies = first.y[i] != first.y[0];
+  CHECK(varies);
+
+  // The clip is 45 frames and, like the VP9 one, plays again from the top.
+  const int count = 1 + decode_all(*src);
+  CHECK(count == 45);
+  src->restart();
+  CHECK(decode_all(*src) == 45);
+}
+
 TEST_CASE("video decode: every frame of the clip comes out, twice") {
   const MountedFixtures fixtures;
   REQUIRE(fixtures.ok);

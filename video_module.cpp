@@ -250,8 +250,8 @@ private:
       Decoder &decoder = decoder_for(a.entity);
       if (!decoder.initialized) {
         decoder.initialized = true;
-        decoder.hw = !player.clip.empty() && is_webm(player.clip) &&
-                     hw_decode_available(ctx.device());
+        decoder.hw = hw_decode_available(ctx.device()) &&
+                     webm_is_vp9(player.clip);
         if (!decoder.hw) {
           SourcePtr source;
           if (!player.clip.empty())
@@ -486,11 +486,6 @@ private:
           m_hw_clips[i] = std::move(m_hw_clips.back());
         m_hw_clips.pop_back();
       }
-  }
-
-  [[nodiscard]] static bool is_webm(const nx::string_view path) {
-    return path.size() >= 5 &&
-           path.substr(path.size() - 5) == nx::string_view(".webm");
   }
 
   void start_audio(nxe::ModuleContext &ctx, Decoder &decoder,

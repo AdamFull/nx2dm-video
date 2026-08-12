@@ -17,7 +17,7 @@ nx_module(video
         DISPLAY "WebM video playback"
         SOURCES video_module.cpp video_source.cpp video_pass.cpp video_decode.cpp
                 video_audio.cpp video_scripting.cpp video_hw.cpp
-        DEPENDS nx::vpx nx::webm nx::opus nx::vorbis
+        DEPENDS nx::vpx nx::webm nx::opus nx::vorbis nx::gav1
         ASSETS assets)
 
 if (NX_BUILD_TESTS)

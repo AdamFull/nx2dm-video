@@ -29,6 +29,17 @@ set(NX_LIBWEBM_TAG "6184f4484a826724b5293837134ab9492261b941"
 set(NX_LIBWEBM_SOURCE_DIR "" CACHE PATH
         "An existing libwebm checkout. Empty fetches NX_LIBWEBM_TAG.")
 
+# libgav1 (AV1 decode). Unlike libvpx it has a real CMake build, so we run it
+# rather than hand-committing a config. Configured decode-only with the
+# std::mutex thread pool, which drops its one external dependency (Abseil), and
+# with no examples or tests.
+set(NX_LIBGAV1_REPOSITORY "https://chromium.googlesource.com/codecs/libgav1"
+        CACHE STRING "Where to fetch libgav1 from")
+set(NX_LIBGAV1_TAG "c1deec657b32b911920c78e078cfd089faa77200"
+        CACHE STRING "libgav1 commit to build against")
+set(NX_LIBGAV1_SOURCE_DIR "" CACHE PATH
+        "An existing libgav1 checkout. Empty fetches NX_LIBGAV1_TAG.")
+
 function(nx_add_video_codecs)
     include(FetchContent)
 
@@ -103,4 +114,40 @@ function(nx_add_video_codecs)
     add_library(nx::webm ALIAS nx_webm)
     target_include_directories(nx_webm SYSTEM PUBLIC "${_webm_dir}")
     set_target_properties(nx_webm PROPERTIES FOLDER "third_party")
+
+    # libgav1 - built through its own CMake. The options must be set before the
+    # subdirectory runs; std::mutex threading is what avoids Abseil.
+    set(LIBGAV1_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(LIBGAV1_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+    set(LIBGAV1_THREADPOOL_USE_STD_MUTEX 1 CACHE STRING "" FORCE)
+
+    set(_gav1_submodule "${CMAKE_CURRENT_LIST_DIR}/third_party/libgav1")
+    if (NX_LIBGAV1_SOURCE_DIR)
+        set(_gav1_dir "${NX_LIBGAV1_SOURCE_DIR}")
+    elseif (EXISTS "${_gav1_submodule}/src/gav1/decoder.h")
+        set(_gav1_dir "${_gav1_submodule}")
+        message(STATUS "nx2d: libgav1 from submodule")
+    endif ()
+
+    if (_gav1_dir)
+        add_subdirectory("${_gav1_dir}"
+                "${CMAKE_BINARY_DIR}/_deps/libgav1-build" EXCLUDE_FROM_ALL)
+    else ()
+        FetchContent_Declare(libgav1
+                GIT_REPOSITORY "${NX_LIBGAV1_REPOSITORY}"
+                GIT_TAG "${NX_LIBGAV1_TAG}"
+                GIT_PROGRESS TRUE)
+        message(STATUS "nx2d: fetching libgav1 ${NX_LIBGAV1_TAG}")
+        FetchContent_MakeAvailable(libgav1)
+        set(_gav1_dir "${libgav1_SOURCE_DIR}")
+    endif ()
+
+    if (NOT TARGET libgav1_static)
+        message(FATAL_ERROR "nx2d: libgav1_static was not created")
+    endif ()
+    add_library(nx::gav1 ALIAS libgav1_static)
+    # Consumers include "gav1/decoder.h"; make sure the header root is on the
+    # path, and SYSTEM so libgav1's headers never warn into an engine build.
+    target_include_directories(libgav1_static SYSTEM INTERFACE "${_gav1_dir}/src")
+    set_target_properties(libgav1_static PROPERTIES FOLDER "third_party")
 endfunction()
