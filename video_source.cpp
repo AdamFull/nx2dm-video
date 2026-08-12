@@ -69,6 +69,15 @@ bool PacedPlayback::seek(const f64 target_seconds) {
   return true;
 }
 
+const VideoFrame *PacedPlayback::advance_to(const f64 target, i32 *const budget) {
+  if (m_source == nullptr)
+    return nullptr;
+  if (target + 1e-6 < m_clock)
+    (void)seek(target); // a backward target: seek sets the clock to it
+  const f64 dt = target - m_clock;
+  return advance(dt > 0.0 ? dt : 0.0, budget);
+}
+
 const VideoFrame *PacedPlayback::advance(const f64 dt, i32 *const budget) {
   if (m_source == nullptr)
     return nullptr;

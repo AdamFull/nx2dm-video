@@ -8,6 +8,7 @@
 #include "video/video_clip.h"
 #include "video/video_component.h"
 #include "video/video_decode.h"
+#include "video/video_gpu.h"
 #include "video/video_hw.h"
 #include "video/video_mediacodec.h"
 #include "video/video_pass.h"
@@ -414,7 +415,7 @@ private:
         }
         if (clip.failed)
           continue;
-        const HwFrame frame = clip.source.frame_at(item.pts, item.looping);
+        const GpuFrame frame = clip.source.frame_at(item.pts, item.looping);
         // Report end-of-stream back to the simulation (it reads it next tick).
         if (item.hw_finished != nullptr)
           item.hw_finished->store(clip.source.finished(),

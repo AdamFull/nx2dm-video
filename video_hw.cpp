@@ -26,7 +26,7 @@ struct HwVideoSource::Impl {
   f64 next_pts = 0.0;
   bool have_next = false;
   f64 current_pts = -1.0;
-  HwFrame frame;
+  GpuFrame frame;
   bool valid = false;
   bool finished = false;
 
@@ -84,7 +84,7 @@ f64 HwVideoSource::frame_rate() const noexcept { return m->demux.frame_rate(); }
 f64 HwVideoSource::position() const noexcept { return m->current_pts; }
 bool HwVideoSource::finished() const noexcept { return m->finished; }
 
-HwFrame HwVideoSource::frame_at(const f64 target_seconds, const bool looping) {
+GpuFrame HwVideoSource::frame_at(const f64 target_seconds, const bool looping) {
   if (target_seconds + 1e-6 < m->current_pts) {
     m->decoder.reset_stream();
     (void)m->demux.seek(target_seconds);
@@ -143,7 +143,7 @@ u32 HwVideoSource::height() const noexcept { return 0; }
 f64 HwVideoSource::frame_rate() const noexcept { return 0.0; }
 f64 HwVideoSource::position() const noexcept { return 0.0; }
 bool HwVideoSource::finished() const noexcept { return true; }
-HwFrame HwVideoSource::frame_at(f64, bool) { return {}; }
+GpuFrame HwVideoSource::frame_at(f64, bool) { return {}; }
 
 #endif
 

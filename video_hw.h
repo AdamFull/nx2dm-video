@@ -2,52 +2,36 @@
 
 /**
  * @file video_hw.h
- * @brief The hardware-decode clip (namespace nxm::video).
+ * @brief The desktop hardware-decode source: Vulkan Video behind the shared
+ * GpuVideoSource interface (namespace nxm::video).
  */
 
-#include "video/video_source.h"
-
-#include "core/rendering/rhi/device.h"
+#include "video/video_gpu.h"
 
 #include "core/foundation/strings/utf8_string_view.h"
 
-#include <glm/vec2.hpp>
 #include <memory>
 
 namespace nxm::video {
 
-/// Whether the device can hardware-decode the VP9 this module plays.
-[[nodiscard]] bool hw_decode_available(nxe::rhi::Device &device);
-
-struct HwFrame {
-  nxe::rhi::TextureHandle luma;
-  nxe::rhi::TextureHandle chroma;
-  glm::vec2 uv_scale{1.f, 1.f};
-  ColourInfo colour;
-  [[nodiscard]] bool valid() const noexcept {
-    return luma.valid() && chroma.valid();
-  }
-};
-
-class HwVideoSource {
+class HwVideoSource final : public GpuVideoSource {
 public:
   HwVideoSource();
-  ~HwVideoSource();
+  ~HwVideoSource() override;
   HwVideoSource(const HwVideoSource &) = delete;
   HwVideoSource &operator=(const HwVideoSource &) = delete;
 
-  [[nodiscard]] bool open(nxe::rhi::Device &device, nx::string_view path);
-  [[nodiscard]] bool valid() const noexcept;
-  [[nodiscard]] u32 width() const noexcept;
-  [[nodiscard]] u32 height() const noexcept;
-  [[nodiscard]] f64 frame_rate() const noexcept;
+  [[nodiscard]] bool open(nxe::rhi::Device &device,
+                          nx::string_view path) override;
+  [[nodiscard]] bool valid() const noexcept override;
+  [[nodiscard]] u32 width() const noexcept override;
+  [[nodiscard]] u32 height() const noexcept override;
+  [[nodiscard]] f64 frame_rate() const noexcept override;
 
-  [[nodiscard]] HwFrame frame_at(f64 target_seconds, bool looping);
+  [[nodiscard]] GpuFrame frame_at(f64 target_seconds, bool looping) override;
 
-  /// PTS of the frame currently held, in seconds.
-  [[nodiscard]] f64 position() const noexcept;
-  /// True once a non-looping clip has shown its last frame.
-  [[nodiscard]] bool finished() const noexcept;
+  [[nodiscard]] f64 position() const noexcept override;
+  [[nodiscard]] bool finished() const noexcept override;
 
 private:
   struct Impl;

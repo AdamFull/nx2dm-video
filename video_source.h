@@ -111,12 +111,15 @@ public:
   PacedPlayback &operator=(PacedPlayback &&) = default;
 
   void reset(SourcePtr source, bool looping);
+  void set_looping(bool looping) noexcept { m_looping = looping; }
   [[nodiscard]] bool valid() const noexcept { return m_source != nullptr; }
   /// Emission over and, for a non-looping clip, the last frame reached.
   [[nodiscard]] bool finished() const noexcept { return m_finished; }
 
   /// Advances the clock by @p dt seconds and returns the frame to show now, or
   [[nodiscard]] const VideoFrame *advance(f64 dt, i32 *budget = nullptr);
+
+  [[nodiscard]] const VideoFrame *advance_to(f64 target, i32 *budget = nullptr);
 
   [[nodiscard]] bool seek(f64 target_seconds);
 

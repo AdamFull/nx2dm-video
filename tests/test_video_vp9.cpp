@@ -533,7 +533,7 @@ TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
 
   // The opening frame comes out as real luma/chroma textures, at the top of the
   // clip.
-  const nxm::video::HwFrame first = src.frame_at(0.0, false);
+  const nxm::video::GpuFrame first = src.frame_at(0.0, false);
   REQUIRE(first.valid());
   CHECK(src.position() < 0.2);
   CHECK(first.uv_scale.x > 0.9f); // 320 is the coded width here, so no cropping
@@ -541,13 +541,13 @@ TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
 
   // Pacing to a second in lands on a later frame - the clock moved and the
   // decoder chased it forward through the reference chain.
-  const nxm::video::HwFrame later = src.frame_at(1.0, false);
+  const nxm::video::GpuFrame later = src.frame_at(1.0, false);
   REQUIRE(later.valid());
   CHECK(src.position() > 0.8);
   CHECK(src.position() < 1.2);
   CHECK_FALSE(src.finished());
 
-  const nxm::video::HwFrame back = src.frame_at(0.0, false);
+  const nxm::video::GpuFrame back = src.frame_at(0.0, false);
   REQUIRE(back.valid());
   CHECK(src.position() < 0.2);
   {
@@ -570,6 +570,48 @@ TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
     (void)src.frame_at(100.0, false);
   CHECK(src.finished());
   CHECK(src.frame_at(100.0, false).valid());
+}
+
+TEST_CASE("gpu source: the factory drives the CPU backend behind one interface") {
+  TestDevice fixture;
+  if (!fixture.ready)
+    SKIP("no usable RHI device");
+
+  REQUIRE(nx::vfs::initialize());
+  struct Unmount {
+    ~Unmount() { nx::vfs::unmount_all(); }
+  } unmount;
+  REQUIRE(nx::vfs::mount("/", nx::vfs::make_host_device(NX_VIDEO_FIXTURE_DIR), 0)
+              .valid());
+
+  // AV1 is CPU-only (the hardware path is VP9), so the factory returns the CPU
+  // source - but the module never learns which: it drives the one interface.
+  const nxm::video::GpuSourcePtr src =
+      nxm::video::create_video_source(fixture.device, "/test_av1.webm");
+  REQUIRE(src != nullptr);
+  CHECK(src->width() == 320u);
+  CHECK(src->height() == 240u);
+  CHECK(src->frame_rate() > 0.0);
+
+  // The CPU decode paces and uploads into the same GpuFrame the hardware path
+  // produces; pixel correctness is the interleave + shader tests, so here the
+  // frame's shape and the pacing are what is pinned.
+  const nxm::video::GpuFrame first = src->frame_at(0.0, false);
+  REQUIRE(first.valid());
+  CHECK(src->position() < 0.2);
+
+  const nxm::video::GpuFrame later = src->frame_at(1.0, false);
+  REQUIRE(later.valid());
+  CHECK(src->position() > 0.8);
+  CHECK_FALSE(src->finished());
+
+  // A backward show-time seeks; a non-looping clip run past the end finishes.
+  const nxm::video::GpuFrame back = src->frame_at(0.0, false);
+  REQUIRE(back.valid());
+  CHECK(src->position() < 0.2);
+  for (int i = 0; i < 200; ++i)
+    (void)src->frame_at(100.0, false);
+  CHECK(src->finished());
 }
 
 TEST_CASE("vp9 parse: a truncated or empty frame is rejected, not walked off") {
