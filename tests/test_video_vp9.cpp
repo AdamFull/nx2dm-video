@@ -378,6 +378,53 @@ TEST_CASE("vp9 decode: the hardware decodes a keyframe pixel-for-pixel") {
   CHECK(mismatches == 0u);
 }
 
+TEST_CASE("vp9 present: the sampleable copy holds the decoded picture") {
+  TestDevice fixture;
+  if (!fixture.ready)
+    SKIP("no usable RHI device");
+  if (!fixture.device.video_decode_available())
+    SKIP("no hardware video-decode queue");
+
+  std::vector<u8> backing;
+  const std::vector<RawFrame> frames =
+      read_frames(NX_VIDEO_FIXTURE_DIR "/test.webm", backing, 2);
+  REQUIRE(!frames.empty());
+  REQUIRE(frames[0].key);
+
+  nxe::rhi::VideoDecoder decoder;
+  REQUIRE(decoder.init(fixture.device, nxe::rhi::VideoCodec::VP9, 320, 240));
+
+  nxe::rhi::DecodedPicture pic;
+  REQUIRE(decoder.decode(frames[0].bytes.data(),
+                         static_cast<u32>(frames[0].bytes.size()), pic));
+
+  // present() copies the decoded slot into the sampleable image a ycbcr sampler
+  // will read; reading it back must still be the exact decoded luma - the copy
+  // preserves the picture and does not disturb the DPB slot.
+  REQUIRE(decoder.present(pic.slot));
+  nx::vector<u8> sampled;
+  REQUIRE(decoder.read_output_luma(pic.width, pic.height, sampled));
+  REQUIRE(sampled.size() == 320u * 240u);
+
+  const VpxLuma ref = vpx_decode_luma(frames, 0);
+  REQUIRE(ref.ok);
+  usize mismatches = 0;
+  for (usize i = 0; i < sampled.size(); ++i)
+    if (sampled[i] != ref.y[i])
+      ++mismatches;
+  CHECK(mismatches == 0u);
+
+  // The DPB slot survived the copy: reading it directly still matches, so it is
+  // still a usable reference.
+  nx::vector<u8> slot_luma;
+  REQUIRE(decoder.read_luma(pic.slot, pic.width, pic.height, slot_luma));
+  usize slot_mismatches = 0;
+  for (usize i = 0; i < slot_luma.size(); ++i)
+    if (slot_luma[i] != ref.y[i])
+      ++slot_mismatches;
+  CHECK(slot_mismatches == 0u);
+}
+
 TEST_CASE("vp9 parse: a truncated or empty frame is rejected, not walked off") {
   std::vector<u8> backing;
   const std::vector<RawFrame> frames =
