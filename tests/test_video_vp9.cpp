@@ -11,6 +11,8 @@
 
 #include "framework/nxtest.h"
 
+#include "core/rendering/rhi/device.h"
+#include "core/rendering/rhi/vulkan/vk_video.h"
 #include "core/rendering/rhi/vulkan/vk_vp9.h"
 
 #include "mkvparser/mkvparser.h"
@@ -159,6 +161,61 @@ struct VpxDims {
   return dims;
 }
 
+struct VpxLuma {
+  bool ok = false;
+  u32 width = 0;
+  u32 height = 0;
+  std::vector<u8> y;
+};
+
+// libvpx's luma for the frame reached after decoding frames[0..upto], packed
+// tightly. VP9 is a normative integer decoder, so this is exactly what a
+// conformant hardware decoder must produce.
+[[nodiscard]] VpxLuma vpx_decode_luma(const std::vector<RawFrame> &frames,
+                                      const usize upto) {
+  VpxLuma luma;
+  vpx_codec_ctx_t codec{};
+  if (vpx_codec_dec_init(&codec, vpx_codec_vp9_dx(), nullptr, 0) !=
+      VPX_CODEC_OK)
+    return luma;
+  for (usize i = 0; i <= upto && i < frames.size(); ++i) {
+    if (vpx_codec_decode(&codec, frames[i].bytes.data(),
+                         static_cast<unsigned int>(frames[i].bytes.size()),
+                         nullptr, 0) != VPX_CODEC_OK)
+      break;
+    vpx_codec_iter_t it = nullptr;
+    if (const vpx_image_t *img = vpx_codec_get_frame(&codec, &it)) {
+      luma.ok = true;
+      luma.width = img->d_w;
+      luma.height = img->d_h;
+      luma.y.resize(static_cast<usize>(img->d_w) * img->d_h);
+      const u8 *src = img->planes[VPX_PLANE_Y];
+      for (u32 row = 0; row < img->d_h; ++row)
+        std::memcpy(luma.y.data() + static_cast<usize>(row) * img->d_w,
+                    src + static_cast<usize>(row) * img->stride[VPX_PLANE_Y],
+                    img->d_w);
+    }
+  }
+  vpx_codec_destroy(&codec);
+  return luma;
+}
+
+struct TestDevice {
+  nxe::rhi::Device device;
+  bool ready = false;
+  TestDevice() {
+    nxe::rhi::DeviceDesc desc{};
+    desc.application_name = "nx video hw decode tests";
+    ready = device.init(desc);
+  }
+  ~TestDevice() {
+    if (ready)
+      device.shutdown();
+  }
+  TestDevice(const TestDevice &) = delete;
+  TestDevice &operator=(const TestDevice &) = delete;
+};
+
 } // namespace
 
 TEST_CASE("vp9 parse: the keyframe header agrees with libvpx on size and type") {
@@ -275,6 +332,50 @@ TEST_CASE("vp9 parse: every frame of the clip parses, header inside the frame") 
         }
     }
   }
+}
+
+TEST_CASE("vp9 decode: the hardware decodes a keyframe pixel-for-pixel") {
+  TestDevice fixture;
+  if (!fixture.ready)
+    SKIP("no usable RHI device");
+  if (!fixture.device.video_decode_available())
+    SKIP("no hardware video-decode queue");
+
+  std::vector<u8> backing;
+  const std::vector<RawFrame> frames =
+      read_frames(NX_VIDEO_FIXTURE_DIR "/test.webm", backing, 2);
+  REQUIRE(!frames.empty());
+  REQUIRE(frames[0].key);
+
+  nxe::rhi::VideoDecoder decoder;
+  REQUIRE(decoder.init(fixture.device, nxe::rhi::VideoCodec::VP9, 320, 240));
+
+  nxe::rhi::DecodedPicture pic;
+  REQUIRE(decoder.decode(frames[0].bytes.data(),
+                         static_cast<u32>(frames[0].bytes.size()), pic));
+  CHECK(pic.ok);
+  CHECK(pic.show);
+  CHECK(pic.width == 320u);
+  CHECK(pic.height == 240u);
+
+  nx::vector<u8> hw;
+  REQUIRE(decoder.read_luma(pic.slot, pic.width, pic.height, hw));
+  REQUIRE(hw.size() == 320u * 240u);
+
+  // The oracle: libvpx's software decode of the same frame. A conformant VP9
+  // decoder is bit-exact, so any wrong Std field - quant, loop filter,
+  // segmentation, tiles - shows up as a mismatched pixel. This is what finally
+  // pins the parser's tail.
+  const VpxLuma ref = vpx_decode_luma(frames, 0);
+  REQUIRE(ref.ok);
+  REQUIRE(ref.width == 320u);
+  REQUIRE(ref.height == 240u);
+
+  usize mismatches = 0;
+  for (usize i = 0; i < hw.size(); ++i)
+    if (hw[i] != ref.y[i])
+      ++mismatches;
+  CHECK(mismatches == 0u);
 }
 
 TEST_CASE("vp9 parse: a truncated or empty frame is rejected, not walked off") {
