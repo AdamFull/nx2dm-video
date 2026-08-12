@@ -7,6 +7,7 @@
 add_executable(nx_video_tests
         test_video_shader.cpp
         test_video_decode.cpp
+        test_video_vp9.cpp
         test_video_place.cpp
         ../video_source.cpp
         ../video_decode.cpp
