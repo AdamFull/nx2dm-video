@@ -11,7 +11,8 @@ add_executable(nx_video_tests
         test_video_place.cpp
         ../video_source.cpp
         ../video_decode.cpp
-        ../video_audio.cpp)
+        ../video_audio.cpp
+        ../video_hw.cpp)
 
 target_include_directories(nx_video_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/engine" "${CMAKE_SOURCE_DIR}/modules")

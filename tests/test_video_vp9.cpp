@@ -11,9 +11,13 @@
 
 #include "framework/nxtest.h"
 
+#include "video/video_hw.h"
+
 #include "core/rendering/rhi/device.h"
 #include "core/rendering/rhi/vulkan/vk_video.h"
 #include "core/rendering/rhi/vulkan/vk_vp9.h"
+
+#include "core/foundation/vfs/vfs.h"
 
 #include "mkvparser/mkvparser.h"
 
@@ -509,6 +513,49 @@ TEST_CASE("vp9 convert: the ycbcr sampler yields the right RGB") {
   const double mean_error = error_sum / (static_cast<double>(w) * h * 3);
   CHECK(mean_error < 2.0);
   CHECK(big * 100 < w * h); // fewer than 1% of pixels flipped by siting
+}
+
+TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
+  TestDevice fixture;
+  if (!fixture.ready)
+    SKIP("no usable RHI device");
+  if (!nxm::video::hw_decode_available(fixture.device))
+    SKIP("no hardware video-decode queue");
+
+  REQUIRE(nx::vfs::initialize());
+  struct Unmount {
+    ~Unmount() { nx::vfs::unmount_all(); }
+  } unmount;
+  REQUIRE(nx::vfs::mount("/", nx::vfs::make_host_device(NX_VIDEO_FIXTURE_DIR), 0)
+              .valid());
+
+  nxm::video::HwVideoSource src;
+  REQUIRE(src.open(fixture.device, "/test.webm"));
+  CHECK(src.width() == 320u);
+  CHECK(src.height() == 240u);
+  CHECK(src.frame_rate() > 0.0);
+
+  // The opening frame comes out as a real texture, at the top of the clip.
+  glm::vec2 uv{0.f, 0.f};
+  const nxe::rhi::TextureHandle first = src.frame_at(0.0, false, uv);
+  REQUIRE(first.valid());
+  CHECK(src.position() < 0.2);
+  CHECK(uv.x > 0.9f); // 320 is the coded width here, so no cropping
+  CHECK(uv.y > 0.9f);
+
+  // Pacing to a second in lands on a later frame - the clock moved and the
+  // decoder chased it forward through the reference chain.
+  const nxe::rhi::TextureHandle later = src.frame_at(1.0, false, uv);
+  REQUIRE(later.valid());
+  CHECK(src.position() > 0.8);
+  CHECK(src.position() < 1.2);
+  CHECK_FALSE(src.finished());
+
+  // Past the end, a non-looping clip finishes and holds its last frame.
+  for (int i = 0; i < 5; ++i)
+    (void)src.frame_at(100.0, false, uv);
+  CHECK(src.finished());
+  CHECK(src.frame_at(100.0, false, uv).valid());
 }
 
 TEST_CASE("vp9 parse: a truncated or empty frame is rejected, not walked off") {
