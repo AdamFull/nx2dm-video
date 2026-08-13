@@ -686,3 +686,52 @@ TEST_CASE("av1 decode: a session and its parameters come up from the seq header"
   decoder.shutdown();
   CHECK_FALSE(decoder.ready());
 }
+
+// The AV1 decode command runs on the hardware validation-clean and resolves to
+// the plane textures at the right size. Correct pixel RECONSTRUCTION (bit-exact
+// vs libgav1) is not yet asserted here - the picture-info/reference setup the
+// NVIDIA decoder needs to reconstruct is the remaining slice-5 work; this case
+// guards the command assembly, session and plane path against regressions.
+TEST_CASE("av1 decode: a keyframe runs through the hardware decoder clean") {
+  TestDevice fixture;
+  if (!fixture.ready)
+    SKIP("no usable RHI device");
+  if (!fixture.device.video_decode_av1_available())
+    SKIP("no hardware AV1 decode");
+
+  REQUIRE(nx::vfs::initialize());
+  struct Unmount {
+    ~Unmount() { nx::vfs::unmount_all(); }
+  } unmount;
+  REQUIRE(nx::vfs::mount("/", nx::vfs::make_host_device(NX_VIDEO_FIXTURE_DIR), 0)
+              .valid());
+
+  nxm::video::WebmVideoDemux demux;
+  REQUIRE(demux.open("/test_av1.webm", "V_AV01", "V_AV1"));
+  const std::span<const u8> priv = demux.codec_private();
+  nxe::rhi::Av1SequenceHeader seq;
+  REQUIRE(nxe::rhi::parse_av1_codec_private(priv.data(),
+                                            nx::cast<u32>(priv.size()), seq));
+
+  nxe::rhi::VideoDecoder decoder;
+  REQUIRE(decoder.init(fixture.device, nxe::rhi::VideoCodec::AV1, demux.width(),
+                       demux.height(), &seq));
+
+  const u8 *bytes = nullptr;
+  long len = 0;
+  f64 pts = 0.0;
+  REQUIRE(demux.next(bytes, len, pts));
+
+  bool shown = false;
+  u32 w = 0;
+  u32 h = 0;
+  REQUIRE(decoder.decode_frame(bytes, nx::cast<u32>(len), shown, w, h));
+  CHECK(w == 320u);
+  CHECK(h == 240u);
+  REQUIRE(decoder.show_last());
+
+  const nxe::rhi::ReadbackResult luma =
+      fixture.device.uploader().read_texture(decoder.luma_texture());
+  REQUIRE(luma.data != nullptr);
+  fixture.device.uploader().wait(luma.ticket);
+}
