@@ -22,7 +22,7 @@ namespace {
 namespace script = nxe::script;
 
 struct Exposed {
-  nxe::Engine engine{nullptr};
+  nxe::Engine engine{nxe::Game{}};
   nxe::ModuleContext ctx{engine};
   script::Host host;
   nx::vector<script::Host::ServiceInfo> services;
