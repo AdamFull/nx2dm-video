@@ -20,6 +20,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 
 namespace {
 
@@ -65,6 +66,39 @@ public:
 private:
   f64 m_fps;
   u64 m_frame = 0;
+};
+
+class FiniteCountingSource final : public nxm::video::FrameSource {
+public:
+  [[nodiscard]] u32 width() const noexcept override { return 4; }
+  [[nodiscard]] u32 height() const noexcept override { return 4; }
+  [[nodiscard]] f64 frame_rate() const noexcept override { return 10.0; }
+
+  [[nodiscard]] bool next(nxm::video::VideoFrame &out) override {
+    if (m_frame == 3)
+      return false;
+    out.width = 4;
+    out.height = 4;
+    out.y_pitch = 4;
+    out.c_pitch = 2;
+    out.pts = nx::cast<f64>(m_frame++) / 10.0;
+    out.y.assign(16, 0);
+    out.cb.assign(4, 128);
+    out.cr.assign(4, 128);
+    ++decodes;
+    return true;
+  }
+
+  void restart() override {
+    m_frame = 0;
+    ++restarts;
+  }
+
+  int decodes = 0;
+  int restarts = 0;
+
+private:
+  u32 m_frame = 0;
 };
 
 [[nodiscard]] bool same(const nx::vector<u8> &a, const nx::vector<u8> &b) {
@@ -306,6 +340,34 @@ TEST_CASE("video pacing: the frame shown is the one the clock has reached") {
   CHECK(g->pts < 0.31);
 }
 
+TEST_CASE("video pacing: absolute targets stay monotonic across a loop") {
+  auto src = std::make_unique<FiniteCountingSource>();
+  FiniteCountingSource *const raw = src.get();
+  nxm::video::PacedPlayback pacer;
+  pacer.reset(std::move(src), true);
+
+  REQUIRE(pacer.advance_to(0.0) != nullptr);
+  REQUIRE(pacer.advance_to(0.31) != nullptr); // just into the second pass
+  REQUIRE(raw->restarts == 1);
+  const int after_wrap = raw->decodes;
+
+  const nxm::video::VideoFrame *const next = pacer.advance_to(0.32);
+  REQUIRE(next != nullptr);
+  CHECK(next->pts < 0.1);
+  CHECK(raw->restarts == 1);
+  CHECK(raw->decodes == after_wrap); // did not replay a whole clip for 10 ms
+}
+
+TEST_CASE("video demux: memory reads reject overflowing ranges") {
+  const u8 bytes[] = {1u, 2u, 3u, 4u};
+  nxm::video::MemoryReader reader(bytes, 4);
+  u8 out = 0;
+  CHECK(reader.Read(std::numeric_limits<long long>::max() - 1, 8, &out) == -1);
+  CHECK(reader.Read(3, 2, &out) == -1);
+  CHECK(reader.Read(3, 1, &out) == 0);
+  CHECK(out == 4u);
+}
+
 TEST_CASE("video budget: a decode cap holds decodes and catches up over calls") {
   auto src = std::make_unique<CountingSource>(60.0);
   CountingSource *const raw = src.get();
@@ -472,7 +534,7 @@ TEST_CASE("video pacing: a looping clip never finishes; a plain one does") {
   looping.reset(nxm::video::open_webm("/test.webm"), true);
   REQUIRE(looping.advance(0.0) != nullptr);
   for (int i = 0; i < 200; ++i) // 10 s
-    looping.advance(0.05);
+    (void)looping.advance(0.05);
   CHECK(!looping.finished());
   CHECK(looping.advance(0.05) != nullptr);
 

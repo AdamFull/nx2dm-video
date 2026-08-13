@@ -24,6 +24,10 @@ struct HwVideoSource::Impl {
   WebmVideoDemux demux;
   nx::vector<u8> next_bytes;
   f64 next_pts = 0.0;
+  f64 next_due = 0.0;
+  f64 timeline_offset = 0.0;
+  f64 loop_duration = 0.0;
+  f64 last_local_pts = 0.0;
   bool have_next = false;
   f64 current_pts = -1.0;
   GpuFrame frame;
@@ -35,6 +39,8 @@ struct HwVideoSource::Impl {
     long len = 0;
     if (!demux.next(data, len, next_pts))
       return false;
+    last_local_pts = next_pts;
+    next_due = timeline_offset + next_pts;
     next_bytes.assign(data, data + len);
     return true;
   }
@@ -45,6 +51,11 @@ struct HwVideoSource::Impl {
       return;
     }
     if (looping) {
+      const f64 frame_time = 1.0 / nx::max(demux.frame_rate(), 1.0);
+      const f64 cycle = loop_duration > last_local_pts
+                            ? loop_duration
+                            : last_local_pts + frame_time;
+      timeline_offset += cycle;
       demux.restart();
       if (demux_next()) {
         have_next = true;
@@ -72,6 +83,11 @@ bool HwVideoSource::open(rhi::Device &device, const nx::string_view path) {
     nx::logw("video: hw decoder init failed for '{}'", path);
     return false;
   }
+  m->timeline_offset = 0.0;
+  m->loop_duration = m->demux.duration();
+  m->last_local_pts = 0.0;
+  m->current_pts = -1.0;
+  m->finished = false;
   m->pull_next(false);
   m->valid = m->have_next;
   return m->valid;
@@ -88,9 +104,14 @@ GpuFrame HwVideoSource::frame_at(const f64 target_seconds, const bool looping) {
   if (target_seconds + 1e-6 < m->current_pts) {
     m->decoder.reset_stream();
     (void)m->demux.seek(target_seconds);
+    m->timeline_offset = 0.0;
     m->current_pts = -1.0;
     m->finished = false;
     m->pull_next(false);
+  }
+  if (looping && !m->have_next) {
+    m->finished = false;
+    m->pull_next(true);
   }
 
   bool advanced = false;
@@ -98,7 +119,7 @@ GpuFrame HwVideoSource::frame_at(const f64 target_seconds, const bool looping) {
   u32 shown_h = 0;
   // Decode every frame up to the target - VP9 is a reference chain, none can be
   // skipped - and remember the last one, which is the one to show.
-  while (m->have_next && m->next_pts <= target_seconds) {
+  while (m->have_next && m->next_due <= target_seconds) {
     bool shown = false;
     u32 w = 0;
     u32 h = 0;
@@ -109,7 +130,7 @@ GpuFrame HwVideoSource::frame_at(const f64 target_seconds, const bool looping) {
         advanced = true;
         shown_w = w;
         shown_h = h;
-        m->current_pts = m->next_pts;
+        m->current_pts = m->next_due;
       }
     }
     m->pull_next(looping);

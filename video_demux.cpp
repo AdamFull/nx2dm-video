@@ -96,6 +96,12 @@ bool WebmVideoDemux::open(const nx::string_view path, const char *const codec_id
   return true;
 }
 
+f64 WebmVideoDemux::duration() const noexcept {
+  return m_segment != nullptr
+             ? nx::max(nx::cast<f64>(m_segment->GetDuration()) / 1e9, 0.0)
+             : 0.0;
+}
+
 void WebmVideoDemux::restart() {
   m_entry = nullptr;
   m_at_entry = false;

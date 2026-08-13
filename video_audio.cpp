@@ -23,7 +23,7 @@ public:
       : m_data(data), m_size(size) {}
 
   int Read(long long pos, long len, unsigned char *buf) override {
-    if (pos < 0 || len < 0 || pos + len > m_size)
+    if (pos < 0 || len < 0 || pos > m_size || len > m_size - pos)
       return -1;
     std::memcpy(buf, m_data + pos, static_cast<size_t>(len));
     return 0;

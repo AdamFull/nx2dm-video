@@ -484,6 +484,19 @@ TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
     (void)src.frame_at(100.0, false);
   CHECK(src.finished());
   CHECK(src.frame_at(100.0, false).valid());
+  REQUIRE(src.frame_at(3.1, true).valid());
+  CHECK_FALSE(src.finished());
+  CHECK(src.position() >= 3.0);
+
+  // A looping hardware source puts restarted packets on the next cycle of the
+  // presentation timeline. Raw WebM PTS restarts at zero; comparing that value
+  // directly with an absolute target would decode the clip forever here.
+  nxm::video::HwVideoSource looped;
+  REQUIRE(looped.open(fixture.device, "/test.webm"));
+  REQUIRE(looped.frame_at(3.1, true).valid());
+  CHECK(looped.position() >= 3.0);
+  CHECK(looped.position() < 3.2);
+  CHECK_FALSE(looped.finished());
 }
 
 TEST_CASE("gpu source: the factory drives the CPU backend behind one interface") {

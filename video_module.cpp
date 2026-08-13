@@ -92,8 +92,10 @@ struct Decoder {
   bool initialized = false;
   f64 clock = 0.0;
   // The WebM the player's clip resolves to (a .nxvid names one; a raw .webm is
-  // itself) and its loop default, resolved once at init.
+  // itself), plus the player values used to detect runtime changes.
   nx::string source;
+  nx::string player_clip;
+  bool player_looping = true;
   bool loop = true;
   // Written by the render thread when a non-looping clip ends; read here.
   std::atomic<bool> finished{false};
@@ -109,6 +111,7 @@ struct DyingStream {
 struct Source {
   nxe::scene::Entity owner{};
   GpuSourcePtr source;
+  nx::string clip;
   bool opened = false;
   bool failed = false;
   bool touched = false;
@@ -236,8 +239,38 @@ private:
         const ResolvedClip resolved = resolve_clip(player);
         decoder.source = resolved.source;
         decoder.loop = resolved.loop;
+        decoder.player_clip = player.clip;
+        player.looping = resolved.loop;
+        decoder.player_looping = player.looping;
         if (m_audio_enabled)
           start_audio(ctx, decoder);
+      } else if (player.clip != decoder.player_clip) {
+        if (decoder.audio_started) {
+          if (ctx.mixer().valid())
+            ctx.mixer().stop(decoder.voice);
+          m_dying_streams.push_back(
+              {std::move(decoder.audio), decoder.voice});
+          decoder.voice = {};
+          decoder.audio_started = false;
+        }
+        const ResolvedClip resolved = resolve_clip(player);
+        decoder.source = resolved.source;
+        decoder.loop = resolved.loop;
+        decoder.player_clip = player.clip;
+        player.looping = resolved.loop;
+        decoder.player_looping = player.looping;
+        decoder.clock = 0.0;
+        decoder.finished.store(false, std::memory_order_relaxed);
+        if (m_audio_enabled)
+          start_audio(ctx, decoder);
+      }
+
+      if (player.looping != decoder.player_looping) {
+        decoder.player_looping = player.looping;
+        decoder.loop = player.looping;
+        decoder.finished.store(false, std::memory_order_relaxed);
+        if (decoder.audio_started)
+          reseat_audio(ctx, decoder, decoder.clock);
       }
 
       if (player.seek_to >= 0.0) {
@@ -309,15 +342,18 @@ private:
 
   void record(nxe::ModuleContext &ctx, nxe::rg::RenderGraph &graph,
               nxe::RenderContext &context) {
+    for (nx::unique_ptr<Source> &s : m_sources)
+      s->touched = false;
+
     const VideoChannel *const channel =
         context.packet != nullptr ? context.packet->find_channel<VideoChannel>()
                                   : nullptr;
-    if (channel == nullptr || channel->items.empty())
+    if (channel == nullptr || channel->items.empty()) {
+      reap_sources();
       return;
+    }
 
     nxe::rhi::Device &device = ctx.device();
-    for (nx::unique_ptr<Source> &s : m_sources)
-      s->touched = false;
 
     const f32 aspect = context.extent.height != 0
                            ? nx::cast<f32>(context.extent.width) /
@@ -333,6 +369,12 @@ private:
               : item.rect;
 
       Source &clip = source_for(item.owner);
+      if (clip.clip != item.clip) {
+        clip.source.reset();
+        clip.clip = item.clip;
+        clip.opened = false;
+        clip.failed = false;
+      }
       if (!clip.opened) {
         clip.opened = true;
         clip.source = create_video_source(device, item.clip);

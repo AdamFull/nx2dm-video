@@ -48,6 +48,7 @@ bool SyntheticSource::next(VideoFrame &out) {
 void PacedPlayback::reset(SourcePtr source, const bool looping) {
   m_source = std::move(source);
   m_looping = looping;
+  m_presentation_clock = 0.0;
   m_clock = 0.0;
   m_has_current = false;
   m_has_next = false;
@@ -61,6 +62,7 @@ bool PacedPlayback::seek(const f64 target_seconds) {
   const f64 target = target_seconds > 0.0 ? target_seconds : 0.0;
   if (!m_source->seek(target))
     return false;
+  m_presentation_clock = target;
   m_clock = target;
   m_has_current = false;
   m_has_next = false;
@@ -72,9 +74,9 @@ bool PacedPlayback::seek(const f64 target_seconds) {
 const VideoFrame *PacedPlayback::advance_to(const f64 target, i32 *const budget) {
   if (m_source == nullptr)
     return nullptr;
-  if (target + 1e-6 < m_clock)
+  if (target + 1e-6 < m_presentation_clock)
     (void)seek(target); // a backward target: seek sets the clock to it
-  const f64 dt = target - m_clock;
+  const f64 dt = target - m_presentation_clock;
   return advance(dt > 0.0 ? dt : 0.0, budget);
 }
 
@@ -82,6 +84,7 @@ const VideoFrame *PacedPlayback::advance(const f64 dt, i32 *const budget) {
   if (m_source == nullptr)
     return nullptr;
 
+  m_presentation_clock += dt;
   m_clock += dt;
 
   const auto avail = [&] { return budget == nullptr || *budget > 0; };

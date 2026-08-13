@@ -127,6 +127,9 @@ private:
   SourcePtr m_source;
   VideoFrame m_current;
   VideoFrame m_next;
+  // Presentation time is monotonic across loops; m_clock is local to the
+  // current pass through the clip and resets when the source restarts.
+  f64 m_presentation_clock = 0.0;
   f64 m_clock = 0.0;
   bool m_has_current = false;
   bool m_has_next = false;
