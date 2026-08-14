@@ -14,6 +14,7 @@
 #include "video/video_clip.h"
 #include "video/video_decode.h"
 #include "video/video_demux.h"
+#include "video/video_mediacodec.h"
 #include "video/video_source.h"
 
 #include "core/foundation/vfs/vfs.h"
@@ -206,6 +207,32 @@ TEST_CASE("video demux: re-opens for a second codec id on the same object") {
   f64 pts = 0.0;
   REQUIRE(demux.next(data, len, pts)); // and yields real packets after re-open
   CHECK(len > 0);
+  CHECK(demux.max_frame_size() >= nx::cast<usize>(len));
+}
+
+TEST_CASE("MediaCodec planes: padded and interleaved input copies safely") {
+  // Two rows of three samples. Pixel stride two models an interleaved chroma
+  // plane; row stride six leaves the other channel between the samples.
+  const u8 src[] = {1, 90, 2, 91, 3, 92, 4, 93, 5, 94, 6, 95};
+  u8 dst[6] = {};
+  REQUIRE(nxm::video::mediacodec_detail::copy_plane_checked(
+      dst, sizeof(dst), 3, src, sizeof(src), 6, 2, 3, 2));
+  for (usize i = 0; i < 6; ++i)
+    CHECK(dst[i] == i + 1);
+}
+
+TEST_CASE("MediaCodec planes: inconsistent vendor bounds are rejected") {
+  const u8 src[12] = {};
+  u8 dst[6] = {};
+  // Eleven source bytes are required: row 1 + sample 2 reaches byte ten.
+  CHECK_FALSE(nxm::video::mediacodec_detail::copy_plane_checked(
+      dst, sizeof(dst), 3, src, 10, 6, 2, 3, 2));
+  CHECK_FALSE(nxm::video::mediacodec_detail::copy_plane_checked(
+      dst, sizeof(dst) - 1, 3, src, sizeof(src), 6, 2, 3, 2));
+  CHECK_FALSE(nxm::video::mediacodec_detail::copy_plane_checked(
+      dst, sizeof(dst), 3, src, sizeof(src), 0, 2, 3, 2));
+  CHECK_FALSE(nxm::video::mediacodec_detail::copy_plane_checked(
+      dst, sizeof(dst), 3, src, sizeof(src), 6, 0, 3, 2));
 }
 
 TEST_CASE("video frame: chroma interleaves into one NV12 R8G8 plane") {

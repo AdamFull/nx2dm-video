@@ -102,6 +102,31 @@ f64 WebmVideoDemux::duration() const noexcept {
              : 0.0;
 }
 
+usize WebmVideoDemux::max_frame_size() const noexcept {
+  usize largest = 0;
+  if (m_segment == nullptr)
+    return largest;
+  for (const mkvparser::Cluster *cluster = m_segment->GetFirst();
+       cluster != nullptr && !cluster->EOS();
+       cluster = m_segment->GetNext(cluster)) {
+    const mkvparser::BlockEntry *entry = nullptr;
+    long status = cluster->GetFirst(entry);
+    while (status >= 0 && entry != nullptr && !entry->EOS()) {
+      const mkvparser::Block *const block = entry->GetBlock();
+      if (block != nullptr && block->GetTrackNumber() == m_track_number)
+        for (int i = 0; i < block->GetFrameCount(); ++i) {
+          const long len = block->GetFrame(i).len;
+          if (len > 0)
+            largest = nx::max(largest, nx::cast<usize>(len));
+        }
+      const mkvparser::BlockEntry *next = nullptr;
+      status = cluster->GetNext(entry, next);
+      entry = next;
+    }
+  }
+  return largest;
+}
+
 void WebmVideoDemux::restart() {
   m_entry = nullptr;
   m_at_entry = false;

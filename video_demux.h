@@ -84,6 +84,7 @@ public:
   [[nodiscard]] u32 height() const noexcept { return m_height; }
   [[nodiscard]] f64 frame_rate() const noexcept { return m_fps; }
   [[nodiscard]] f64 duration() const noexcept;
+  [[nodiscard]] usize max_frame_size() const noexcept;
   [[nodiscard]] ColourInfo colour() const noexcept { return m_colour; }
   /// The track's CodecPrivate (codec setup data), empty when it carries none.
   [[nodiscard]] std::span<const u8> codec_private() const noexcept {
