@@ -62,7 +62,7 @@ struct VideoItem {
   f64 pts = 0.0;
   bool looping = false;
   nx::string clip;
-  std::atomic<bool> *finished = nullptr;
+  nx::shared_ptr<std::atomic<bool>> finished;
 };
 
 struct VideoChannel {
@@ -98,7 +98,8 @@ struct Decoder {
   bool player_looping = true;
   bool loop = true;
   // Written by the render thread when a non-looping clip ends; read here.
-  std::atomic<bool> finished{false};
+  nx::shared_ptr<std::atomic<bool>> finished =
+      nx::make_shared<std::atomic<bool>>(false);
 };
 
 /// A stream a seek replaced, kept alive until its old voice has drained it - the
@@ -260,7 +261,7 @@ private:
         player.looping = resolved.loop;
         decoder.player_looping = player.looping;
         decoder.clock = 0.0;
-        decoder.finished.store(false, std::memory_order_relaxed);
+        decoder.finished->store(false, std::memory_order_relaxed);
         if (m_audio_enabled)
           start_audio(ctx, decoder);
       }
@@ -268,7 +269,7 @@ private:
       if (player.looping != decoder.player_looping) {
         decoder.player_looping = player.looping;
         decoder.loop = player.looping;
-        decoder.finished.store(false, std::memory_order_relaxed);
+        decoder.finished->store(false, std::memory_order_relaxed);
         if (decoder.audio_started)
           reseat_audio(ctx, decoder, decoder.clock);
       }
@@ -299,7 +300,7 @@ private:
       player.position = decoder.clock;
       // End-of-stream comes back through the atomic the render thread wrote last
       // tick - the one clean render->simulation signal the packet model lacks.
-      player.finished = decoder.finished.load(std::memory_order_relaxed);
+      player.finished = decoder.finished->load(std::memory_order_relaxed);
 
       VideoItem item;
       item.owner = a.entity;
@@ -315,7 +316,7 @@ private:
       item.pts = decoder.clock;
       item.clip = decoder.source;
       item.looping = decoder.loop;
-      item.finished = &decoder.finished;
+      item.finished = decoder.finished;
       channel.items.push_back(std::move(item));
     }
 
@@ -385,7 +386,7 @@ private:
 
       const GpuFrame frame = clip.source->frame_at(item.pts, item.looping);
       // Report end-of-stream back to the simulation (it reads it next tick).
-      if (item.finished != nullptr)
+      if (item.finished)
         item.finished->store(clip.source->finished(),
                              std::memory_order_relaxed);
       if (!frame.valid())
