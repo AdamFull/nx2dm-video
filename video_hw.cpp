@@ -2,6 +2,8 @@
 
 #include "core/foundation/diagnostics/log.h"
 
+#include <cmath>
+
 namespace nxm::video {
 
 #if defined(NX_RHI_VULKAN)
@@ -100,14 +102,26 @@ f64 HwVideoSource::frame_rate() const noexcept { return m->demux.frame_rate(); }
 f64 HwVideoSource::position() const noexcept { return m->current_pts; }
 bool HwVideoSource::finished() const noexcept { return m->finished; }
 
+bool HwVideoSource::seek(const f64 target_seconds, const bool looping) {
+  const f64 target = nx::max(target_seconds, 0.0);
+  const f64 local = looping && m->loop_duration > 0.0
+                        ? std::fmod(target, m->loop_duration)
+                        : target;
+  if (!m->valid || !m->demux.seek(local))
+    return false;
+  m->decoder.reset_stream();
+  m->timeline_offset = looping ? target - local : 0.0;
+  m->last_local_pts = 0.0;
+  m->current_pts = -1.0;
+  m->finished = false;
+  m->have_next = false;
+  m->pull_next(false);
+  return m->have_next;
+}
+
 GpuFrame HwVideoSource::frame_at(const f64 target_seconds, const bool looping) {
   if (target_seconds + 1e-6 < m->current_pts) {
-    m->decoder.reset_stream();
-    (void)m->demux.seek(target_seconds);
-    m->timeline_offset = 0.0;
-    m->current_pts = -1.0;
-    m->finished = false;
-    m->pull_next(false);
+    (void)seek(target_seconds, looping);
   }
   if (looping && !m->have_next) {
     m->finished = false;
@@ -162,6 +176,7 @@ bool HwVideoSource::valid() const noexcept { return false; }
 u32 HwVideoSource::width() const noexcept { return 0; }
 u32 HwVideoSource::height() const noexcept { return 0; }
 f64 HwVideoSource::frame_rate() const noexcept { return 0.0; }
+bool HwVideoSource::seek(f64, bool) { return false; }
 f64 HwVideoSource::position() const noexcept { return 0.0; }
 bool HwVideoSource::finished() const noexcept { return true; }
 GpuFrame HwVideoSource::frame_at(f64, bool) { return {}; }

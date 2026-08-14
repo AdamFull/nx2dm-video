@@ -488,6 +488,14 @@ TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
   CHECK_FALSE(src.finished());
   CHECK(src.position() >= 3.0);
 
+  // A source recreated after mobile suspend seeks directly to the retained
+  // simulation clock instead of decoding the whole clip from zero.
+  nxm::video::HwVideoSource resumed;
+  REQUIRE(resumed.open(fixture.device, "/test.webm"));
+  REQUIRE(resumed.seek(1.0, false));
+  REQUIRE(resumed.frame_at(1.0, false).valid());
+  CHECK(resumed.position() > 0.8);
+
   // A looping hardware source puts restarted packets on the next cycle of the
   // presentation timeline. Raw WebM PTS restarts at zero; comparing that value
   // directly with an absolute target would decode the clip forever here.
@@ -530,6 +538,19 @@ TEST_CASE("gpu source: the factory drives the CPU backend behind one interface")
   const nxm::video::GpuFrame later = src->frame_at(1.0, false);
   REQUIRE(later.valid());
   CHECK(src->position() > 0.8);
+  CHECK_FALSE(src->finished());
+
+  REQUIRE(src->seek(0.5, false));
+  REQUIRE(src->frame_at(0.5, false).valid());
+  CHECK(src->position() > 0.3);
+  CHECK(src->position() < 0.7);
+
+  // A recreated looping CPU source keeps the absolute presentation clock but
+  // seeks within the current cycle rather than decoding every earlier loop.
+  REQUIRE(src->seek(3.1, true));
+  REQUIRE(src->frame_at(3.1, true).valid());
+  CHECK(src->position() >= 0.0);
+  CHECK(src->position() < 0.2);
   CHECK_FALSE(src->finished());
 
   // A backward show-time seeks; a non-looping clip run past the end finishes.

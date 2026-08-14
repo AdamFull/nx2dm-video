@@ -6,6 +6,7 @@
 
 #include "core/rendering/rhi/descs.h"
 
+#include <cmath>
 #include <memory>
 #include <span>
 
@@ -47,6 +48,18 @@ public:
   [[nodiscard]] u32 width() const noexcept override { return m_width; }
   [[nodiscard]] u32 height() const noexcept override { return m_height; }
   [[nodiscard]] f64 frame_rate() const noexcept override { return m_fps; }
+  [[nodiscard]] bool seek(const f64 target_seconds,
+                          const bool looping) override {
+    const f64 target = nx::max(target_seconds, 0.0);
+    const f64 duration = m_playback.duration();
+    const f64 local = looping && duration > 0.0
+                          ? std::fmod(target, duration)
+                          : target;
+    if (!m_playback.seek(local, target))
+      return false;
+    m_finished = false;
+    return true;
+  }
   [[nodiscard]] f64 position() const noexcept override { return m_position; }
   [[nodiscard]] bool finished() const noexcept override { return m_finished; }
 

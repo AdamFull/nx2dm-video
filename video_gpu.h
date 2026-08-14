@@ -38,6 +38,8 @@ public:
   [[nodiscard]] virtual u32 height() const noexcept = 0;
   [[nodiscard]] virtual f64 frame_rate() const noexcept = 0;
 
+  [[nodiscard]] virtual bool seek(f64 target_seconds, bool looping) = 0;
+
   /// Decodes up to @p target_seconds and returns the frame to show, looping if
   /// @p looping and the clip has ended.
   [[nodiscard]] virtual GpuFrame frame_at(f64 target_seconds,

@@ -40,6 +40,9 @@ public:
   [[nodiscard]] f64 frame_rate() const noexcept override {
     return m_demux.frame_rate();
   }
+  [[nodiscard]] f64 duration() const noexcept override {
+    return m_demux.duration();
+  }
 
   [[nodiscard]] bool next(VideoFrame &out) override {
     for (;;) {
@@ -129,6 +132,9 @@ public:
   [[nodiscard]] u32 height() const noexcept override { return m_demux.height(); }
   [[nodiscard]] f64 frame_rate() const noexcept override {
     return m_demux.frame_rate();
+  }
+  [[nodiscard]] f64 duration() const noexcept override {
+    return m_demux.duration();
   }
 
   [[nodiscard]] bool next(VideoFrame &out) override {

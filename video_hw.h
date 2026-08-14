@@ -27,6 +27,7 @@ public:
   [[nodiscard]] u32 width() const noexcept override;
   [[nodiscard]] u32 height() const noexcept override;
   [[nodiscard]] f64 frame_rate() const noexcept override;
+  [[nodiscard]] bool seek(f64 target_seconds, bool looping) override;
 
   [[nodiscard]] GpuFrame frame_at(f64 target_seconds, bool looping) override;
 

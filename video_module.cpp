@@ -140,6 +140,10 @@ public:
   }
 
   bool on_attach(nxe::ModuleContext &ctx) override {
+    if (m_attached)
+      return true;
+
+    m_audio_enabled = ctx.config().audio;
     m_can_draw = m_renderer.init(ctx.device(), ctx.load_shader(SHADER));
     if (!m_can_draw)
       nx::logw("video: no renderer; clips will not draw");
@@ -147,15 +151,32 @@ public:
 
     // Simulation: decode a frame per clip into the packet. No device here - the
     // uploader is the render thread's alone (see vk_upload.h).
-    ctx.schedule().define(
-        PRESENT_SYSTEM,
-        nxe::sys::SystemFn([this, &ctx](const nxe::sys::Context &c) {
-          present(ctx, nx::cast<f64>(c.dt));
-        }));
+    if (!ctx.schedule().try_define(
+            PRESENT_SYSTEM,
+            nxe::sys::SystemFn([this, &ctx](const nxe::sys::Context &c) {
+              present(ctx, nx::cast<f64>(c.dt));
+            }))) {
+      nx::logw("video: system '{}' is already owned by another module",
+               PRESENT_SYSTEM);
+      m_renderer.shutdown(ctx.device());
+      m_can_draw = false;
+      return false;
+    }
     ctx.schedule().add(nxe::sys::Stage::Present, PRESENT_SYSTEM);
 
-    if (!m_can_draw)
+    if (!m_can_draw) {
+      m_attached = true;
       return true;
+    }
+
+    const void *const pass_owner = ctx.passes().owner_of(DRAW_PASS);
+    if (pass_owner != nullptr && pass_owner != this) {
+      nx::logw("video: pass '{}' is already owned by another module",
+               DRAW_PASS);
+      m_renderer.shutdown(ctx.device());
+      m_can_draw = false;
+      return false;
+    }
 
     // Renderer: upload this frame's planes and draw. All GPU work lives here.
     ctx.passes().define(
@@ -168,11 +189,14 @@ public:
     if (!ctx.fill_pass_slot(WORLD_SLOT, MINE, name()))
       nx::logw("video: nothing to fill; the frame has no '{}' slot", WORLD_SLOT);
 
+    m_attached = true;
     nx::logi("video: attached");
     return true;
   }
 
   void on_detach(nxe::ModuleContext &ctx) override {
+    if (!m_attached)
+      return;
     // Stop the voices, but do not free the streams here: on_detach runs before
     // the engine stops the audio device (Engine::shutdown), so the audio thread
     // may still be mid-block. The decoders outlive this call and are freed when
@@ -186,11 +210,26 @@ public:
       for (DyingStream &d : m_dying_streams)
         ctx.mixer().stop(d.voice);
     }
+    for (usize i = m_decoders.size(); i-- > 0;)
+      if (!m_decoders[i]->audio_started) {
+        if (i != m_decoders.size() - 1)
+          m_decoders[i] = std::move(m_decoders.back());
+        m_decoders.pop_back();
+      }
     // The sources own device textures or a video decoder; drop them while the
     // device is still up (a hardware decoder waits the GPU idle as it tears
     // down, a CPU source frees its plane textures).
     m_sources.clear();
     m_renderer.shutdown(ctx.device());
+    m_sampler = 0;
+    m_can_draw = false;
+    m_attached = false;
+  }
+
+  void on_suspend(nxe::ModuleContext &) override {
+    if (!m_attached)
+      return;
+    m_sources.clear();
   }
 
 private:
@@ -380,6 +419,8 @@ private:
         clip.opened = true;
         clip.source = create_video_source(device, item.clip);
         clip.failed = clip.source == nullptr;
+        if (clip.source != nullptr && item.pts > 0.0)
+          (void)clip.source->seek(item.pts, item.looping);
       }
       if (clip.source == nullptr)
         continue;
@@ -462,8 +503,11 @@ private:
     if (!stream->open(std::move(codec), 1.f, decoder.loop))
       return;
     stream->pump(); // prime the ring before the voice starts
+    const nxe::audio::VoiceHandle voice = ctx.mixer().play(*stream, {});
+    if (!voice.valid())
+      return;
     decoder.audio = std::move(stream);
-    decoder.voice = ctx.mixer().play(*decoder.audio, {});
+    decoder.voice = voice;
     decoder.audio_started = true;
     decoder.paused = false; // a fresh voice starts running
     decoder.last_dsp = ctx.mixer().dsp_frame();
@@ -532,6 +576,7 @@ private:
   u32 m_sampler = 0;
   bool m_can_draw = false;
   bool m_audio_enabled = true;
+  bool m_attached = false;
 };
 
 } // namespace

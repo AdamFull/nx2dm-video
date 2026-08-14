@@ -58,13 +58,20 @@ void PacedPlayback::reset(SourcePtr source, const bool looping) {
 }
 
 bool PacedPlayback::seek(const f64 target_seconds) {
+  return seek(target_seconds, target_seconds);
+}
+
+bool PacedPlayback::seek(const f64 source_seconds,
+                         const f64 presentation_seconds) {
   if (m_source == nullptr)
     return false;
-  const f64 target = target_seconds > 0.0 ? target_seconds : 0.0;
-  if (!m_source->seek(target))
+  const f64 source = source_seconds > 0.0 ? source_seconds : 0.0;
+  const f64 presentation =
+      presentation_seconds > 0.0 ? presentation_seconds : 0.0;
+  if (!m_source->seek(source))
     return false;
-  m_presentation_clock = target;
-  m_clock = target;
+  m_presentation_clock = presentation;
+  m_clock = source;
   m_has_current = false;
   m_has_next = false;
   m_eos = false;

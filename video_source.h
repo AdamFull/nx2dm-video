@@ -60,6 +60,7 @@ public:
   [[nodiscard]] virtual u32 width() const noexcept = 0;
   [[nodiscard]] virtual u32 height() const noexcept = 0;
   [[nodiscard]] virtual f64 frame_rate() const noexcept = 0;
+  [[nodiscard]] virtual f64 duration() const noexcept { return 0.0; }
 
   /// Fills @p out with the next frame. False at end of stream, before any loop.
   [[nodiscard]] virtual bool next(VideoFrame &out) = 0;
@@ -113,6 +114,9 @@ public:
   void reset(SourcePtr source, bool looping);
   void set_looping(bool looping) noexcept { m_looping = looping; }
   [[nodiscard]] bool valid() const noexcept { return m_source != nullptr; }
+  [[nodiscard]] f64 duration() const noexcept {
+    return m_source != nullptr ? m_source->duration() : 0.0;
+  }
   /// Emission over and, for a non-looping clip, the last frame reached.
   [[nodiscard]] bool finished() const noexcept { return m_finished; }
 
@@ -122,6 +126,7 @@ public:
   [[nodiscard]] const VideoFrame *advance_to(f64 target, i32 *budget = nullptr);
 
   [[nodiscard]] bool seek(f64 target_seconds);
+  [[nodiscard]] bool seek(f64 source_seconds, f64 presentation_seconds);
 
 private:
   SourcePtr m_source;
