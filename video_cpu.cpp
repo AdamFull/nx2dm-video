@@ -76,14 +76,15 @@ private:
   [[nodiscard]] bool upload(const VideoFrame &frame) {
     if (!ensure_textures(frame))
       return false;
-    upload_plane(m_luma, frame.y.data(), frame.y.size(), frame.width,
-                 frame.height, frame.width);
+    const bool luma = upload_plane(m_luma, frame.y.data(), frame.y.size(),
+                                   frame.width, frame.height, frame.width);
     interleave_chroma(frame, m_chroma_scratch);
-    if (!m_chroma_scratch.empty())
-      upload_plane(m_chroma, m_chroma_scratch.data(), m_chroma_scratch.size(),
-                   frame.chroma_width(), frame.chroma_height(),
-                   frame.chroma_width() * 2);
-    return true;
+    if (m_chroma_scratch.empty())
+      return false;
+    const bool chroma = upload_plane(
+        m_chroma, m_chroma_scratch.data(), m_chroma_scratch.size(),
+        frame.chroma_width(), frame.chroma_height(), frame.chroma_width() * 2);
+    return luma && chroma;
   }
 
   [[nodiscard]] bool ensure_textures(const VideoFrame &frame) {
@@ -117,11 +118,12 @@ private:
     return m_device->create_texture(desc);
   }
 
-  void upload_plane(const nxe::rhi::TextureHandle tex, const u8 *const data,
-                    const usize size, const u32 width, const u32 height,
-                    const u32 row_pitch) const {
+  [[nodiscard]] bool upload_plane(const nxe::rhi::TextureHandle tex,
+                                  const u8 *const data, const usize size,
+                                  const u32 width, const u32 height,
+                                  const u32 row_pitch) const {
     if (data == nullptr || size == 0 || !tex.valid())
-      return;
+      return false;
     nxe::rhi::ImageSubresource sub{};
     sub.offset = 0;
     sub.size = nx::cast<u64>(size);
@@ -130,9 +132,10 @@ private:
     sub.depth = 1;
     sub.row_pitch = row_pitch;
     const nxe::rhi::ImageSubresource layout[1] = {sub};
-    (void)m_device->uploader().upload_texture(
-        tex, std::span<const u8>(data, size),
-        std::span<const nxe::rhi::ImageSubresource>(layout, 1));
+    return m_device->uploader()
+        .upload_texture(tex, std::span<const u8>(data, size),
+                        std::span<const nxe::rhi::ImageSubresource>(layout, 1))
+        .ok();
   }
 
   void destroy_textures() noexcept {

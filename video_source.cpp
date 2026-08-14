@@ -1,5 +1,6 @@
 #include "video/video_source.h"
 
+#include <cmath>
 #include <utility>
 
 namespace nxm::video {
@@ -71,11 +72,21 @@ bool PacedPlayback::seek(const f64 target_seconds) {
   return true;
 }
 
-const VideoFrame *PacedPlayback::advance_to(const f64 target, i32 *const budget) {
+const VideoFrame *PacedPlayback::advance_to(const f64 target,
+                                            i32 *const budget) {
   if (m_source == nullptr)
     return nullptr;
-  if (target + 1e-6 < m_presentation_clock)
-    (void)seek(target); // a backward target: seek sets the clock to it
+  if (target + 1e-6 < m_presentation_clock && !seek(target)) {
+    // Seeking is optional on FrameSource. A backward presentation time must
+    // still rewind sources which only implement the mandatory restart().
+    m_source->restart();
+    m_presentation_clock = 0.0;
+    m_clock = 0.0;
+    m_has_current = false;
+    m_has_next = false;
+    m_eos = false;
+    m_finished = false;
+  }
   const f64 dt = target - m_presentation_clock;
   return advance(dt > 0.0 ? dt : 0.0, budget);
 }
@@ -136,10 +147,18 @@ const VideoFrame *PacedPlayback::advance(const f64 dt, i32 *const budget) {
       m_finished = true; // hold the last frame
       break;
     }
-    // Loop: restart from the opening keyframe. The clock resets, so the wrap
-    // costs at most one frame of drift, which no one sees.
+    // EOS is discovered while looking one frame ahead. The last frame still
+    // owns one nominal frame interval, so hold it until that interval expires
+    // rather than wrapping as soon as it is decoded.
+    const f64 frame_time = 1.0 / nx::max(m_source->frame_rate(), 1.0);
+    const f64 cycle = m_current.pts + frame_time;
+    if (m_clock + 1e-9 < cycle)
+      break;
+
+    // Preserve overshoot at the wrap. Resetting to zero makes a large absolute
+    // target show frame zero regardless of where it lies within the next pass.
+    m_clock = cycle > 0.0 ? std::fmod(m_clock, cycle) : 0.0;
     m_source->restart();
-    m_clock = 0.0;
     m_has_current = false;
     m_has_next = false;
     m_eos = false;

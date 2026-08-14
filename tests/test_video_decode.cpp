@@ -358,6 +358,36 @@ TEST_CASE("video pacing: absolute targets stay monotonic across a loop") {
   CHECK(raw->decodes == after_wrap); // did not replay a whole clip for 10 ms
 }
 
+TEST_CASE("video pacing: a loop preserves a large target's cycle position") {
+  auto src = std::make_unique<FiniteCountingSource>();
+  FiniteCountingSource *const raw = src.get();
+  nxm::video::PacedPlayback pacer;
+  pacer.reset(std::move(src), true);
+
+  // Three frames at 10 Hz make a 0.3 s cycle. 0.55 s is 0.25 s into its second
+  // pass, where frame two (PTS 0.2) is still being shown.
+  const nxm::video::VideoFrame *const frame = pacer.advance_to(0.55);
+  REQUIRE(frame != nullptr);
+  CHECK(std::fabs(frame->pts - 0.2) < 1e-9);
+  CHECK(raw->restarts == 1);
+}
+
+TEST_CASE("video pacing: a backward target restarts a source without seek") {
+  auto src = std::make_unique<FiniteCountingSource>();
+  FiniteCountingSource *const raw = src.get();
+  nxm::video::PacedPlayback pacer;
+  pacer.reset(std::move(src), false);
+
+  const nxm::video::VideoFrame *frame = pacer.advance_to(0.2);
+  REQUIRE(frame != nullptr);
+  CHECK(std::fabs(frame->pts - 0.2) < 1e-9);
+
+  frame = pacer.advance_to(0.05);
+  REQUIRE(frame != nullptr);
+  CHECK(frame->pts < 0.1);
+  CHECK(raw->restarts == 1);
+}
+
 TEST_CASE("video demux: memory reads reject overflowing ranges") {
   const u8 bytes[] = {1u, 2u, 3u, 4u};
   nxm::video::MemoryReader reader(bytes, 4);
