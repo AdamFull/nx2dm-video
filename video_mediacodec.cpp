@@ -36,7 +36,7 @@ bool copy_plane_checked(u8 *const dst, const usize dst_size,
   return true;
 }
 
-} // namespace nxm::video::mediacodec_detail
+}
 
 #if defined(__ANDROID__)
 
@@ -97,9 +97,6 @@ public:
       return false;
     }
 
-    // The decoder renders into this reader's surface; we read the frame back as
-    // CPU-accessible YUV_420_888 planes. A few buffers deep so the decoder is
-    // not starved while we hold one.
     if (__builtin_available(android 26, *)) {
       if (AImageReader_newWithUsage(
               nx::cast<i32>(m_width), nx::cast<i32>(m_height),
@@ -114,7 +111,7 @@ public:
         return false;
       }
     } else {
-      return false; // AImage plane access needs API 26; the caller uses the CPU
+      return false;
     }
 
     m_codec = AMediaCodec_createDecoderByType(m_mime);
@@ -200,7 +197,6 @@ private:
     m_has_pending = false;
     m_pending_input.clear();
     m_small_input_retries = 0;
-    // Drop any images the flushed decoder already handed the reader.
     for (;;) {
       AImage *img = nullptr;
       if (AImageReader_acquireNextImage(m_reader, &img) != AMEDIA_OK ||
@@ -211,8 +207,6 @@ private:
     return true;
   }
 
-  // Feeds compressed packets in and drains one decoded frame out. False at end
-  // of stream.
   [[nodiscard]] bool decode_one(VideoFrame &out) {
     if (m_output_eos || m_failed)
       return false;
@@ -234,8 +228,6 @@ private:
         const bool config =
             (info.flags & AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG) != 0;
         const bool render = info.size > 0 && !config;
-        // render == true sends the frame into the reader's surface; false just
-        // recycles the buffer (a codec-config or empty end-of-stream buffer).
         if (AMediaCodec_releaseOutputBuffer(m_codec, nx::cast<size_t>(idx),
                                             render) != AMEDIA_OK) {
           nx::logw("video: MediaCodec output release failed");
@@ -249,16 +241,13 @@ private:
             m_failed = true;
             return false;
           }
-          return true; // an EOS-marked frame is returned once, then next() ends
+          return true;
         }
         if (eos)
           return false;
         continue;
       }
       if (idx == AMEDIACODEC_INFO_TRY_AGAIN_LATER) {
-        // Input EOS does not mean output EOS: delayed/B-frame output can still
-        // arrive. Only the EOS-marked output above ends the stream. The bound
-        // prevents a broken vendor codec from hanging the render thread.
         if (++idle_dequeues >= MAX_IDLE_DEQUEUES) {
           nx::logw("video: MediaCodec timed out draining output");
           m_failed = true;
@@ -266,8 +255,6 @@ private:
         }
         continue;
       }
-      // INFO_OUTPUT_FORMAT_CHANGED / _BUFFERS_CHANGED: nothing to do in surface
-      // mode.
       if (idx == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED ||
           idx == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) {
         if (++idle_dequeues >= MAX_IDLE_DEQUEUES) {
@@ -325,8 +312,6 @@ private:
     u8 *const in =
         AMediaCodec_getInputBuffer(m_codec, nx::cast<size_t>(idx), &cap);
     if (in == nullptr || m_pending_input.size() > cap) {
-      // Return the unusable slot, but retain the packet for another input
-      // buffer. The configured max-input-size should make this exceptional.
       if (AMediaCodec_queueInputBuffer(m_codec, nx::cast<size_t>(idx), 0, 0, 0,
                                        0) != AMEDIA_OK)
         return false;
@@ -349,8 +334,6 @@ private:
     return true;
   }
 
-  // Pulls the just-rendered frame out of the reader. The render is asynchronous,
-  // so a bounded wait covers the buffer arriving after releaseOutputBuffer.
   [[nodiscard]] bool acquire(VideoFrame &out, const i64 pts_us) {
     for (int tries = 0; tries < 64; ++tries) {
       AImage *img = nullptr;
@@ -452,7 +435,7 @@ private:
   VideoFrame m_pending;
 };
 
-} // namespace
+}
 
 SourcePtr open_media_codec(const nx::string_view path) {
   auto source = std::make_unique<MediaCodecSource>();
@@ -461,14 +444,14 @@ SourcePtr open_media_codec(const nx::string_view path) {
   return nullptr;
 }
 
-} // namespace nxm::video
+}
 
-#else // MediaCodec is Android-only.
+#else
 
 namespace nxm::video {
 
 SourcePtr open_media_codec(nx::string_view) { return nullptr; }
 
-} // namespace nxm::video
+}
 
 #endif

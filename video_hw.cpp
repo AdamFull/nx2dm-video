@@ -8,7 +8,7 @@ namespace nxm::video {
 
 #if defined(NX_RHI_VULKAN)
 
-} // namespace nxm::video
+}
 
 #include "core/rendering/rhi/vulkan/vk_video.h"
 
@@ -19,7 +19,7 @@ namespace {
 
 namespace rhi = nxe::rhi;
 
-} // namespace
+}
 
 struct HwVideoSource::Impl {
   rhi::VideoDecoder decoder;
@@ -131,8 +131,6 @@ GpuFrame HwVideoSource::frame_at(const f64 target_seconds, const bool looping) {
   bool advanced = false;
   u32 shown_w = 0;
   u32 shown_h = 0;
-  // Decode every frame up to the target - VP9 is a reference chain, none can be
-  // skipped - and remember the last one, which is the one to show.
   while (m->have_next && m->next_due <= target_seconds) {
     bool shown = false;
     u32 w = 0;
@@ -164,7 +162,7 @@ GpuFrame HwVideoSource::frame_at(const f64 target_seconds, const bool looping) {
   return m->frame;
 }
 
-#else // no hardware video decode on this backend
+#else
 
 bool hw_decode_available(nxe::rhi::Device &) { return false; }
 
@@ -183,4 +181,4 @@ GpuFrame HwVideoSource::frame_at(f64, bool) { return {}; }
 
 #endif
 
-} // namespace nxm::video
+}

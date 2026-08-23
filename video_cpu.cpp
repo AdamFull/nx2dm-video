@@ -13,8 +13,6 @@
 namespace nxm::video {
 namespace {
 
-// The test pattern a clip that will not open falls back to, so a source is
-// always something to draw.
 constexpr u32 SYNTH_WIDTH = 640;
 constexpr u32 SYNTH_HEIGHT = 360;
 constexpr f64 SYNTH_FPS = 30.0;
@@ -28,7 +26,7 @@ public:
     m_device = &device;
     SourcePtr source;
     if (!path.empty()) {
-      source = open_media_codec(path); // Android hardware; null elsewhere
+      source = open_media_codec(path);
       if (!source)
         source = open_webm(path);
     }
@@ -69,9 +67,7 @@ public:
     const VideoFrame *const frame = m_playback.advance_to(target_seconds);
     m_finished = m_playback.finished();
     if (frame == nullptr)
-      return m_frame; // nothing new; hold what is on the GPU
-    // The pacer re-emits the current frame every call; only a new one is worth
-    // the upload.
+      return m_frame;
     if (frame->pts != m_uploaded_pts || !m_frame.valid()) {
       if (upload(*frame)) {
         m_uploaded_pts = frame->pts;
@@ -182,7 +178,7 @@ private:
   bool m_finished = false;
 };
 
-} // namespace
+}
 
 GpuSourcePtr create_video_source(nxe::rhi::Device &device,
                                  const nx::string_view path) {
@@ -199,4 +195,4 @@ GpuSourcePtr create_video_source(nxe::rhi::Device &device,
   return nullptr;
 }
 
-} // namespace nxm::video
+}

@@ -1,10 +1,5 @@
 #pragma once
 
-/**
- * @file video_source.h
- * @brief Decoded frames, and where they come from (namespace nxm::video).
- */
-
 #include "core/foundation/containers/blob.h"
 #include "core/foundation/core/foundation.h"
 
@@ -19,8 +14,6 @@ struct ColourInfo {
   bool full_range = false;
 };
 
-/// One decoded frame: planar Y'CbCr 4:2:0, tightly packed. Chroma is
-/// (width+1)/2 by (height+1)/2. `pts` is the presentation time in seconds.
 struct VideoFrame {
   u32 width = 0;
   u32 height = 0;
@@ -50,9 +43,6 @@ inline void interleave_chroma(const VideoFrame &frame, nx::vector<u8> &out) {
   }
 }
 
-/// A source of decoded frames. The always-available implementation is CPU
-/// software decode (libwebm + libvpx); the synthetic one drives the whole
-/// pipeline without a codec, which is what proves the engine side end to end.
 class FrameSource {
 public:
   virtual ~FrameSource() = default;
@@ -62,10 +52,8 @@ public:
   [[nodiscard]] virtual f64 frame_rate() const noexcept = 0;
   [[nodiscard]] virtual f64 duration() const noexcept { return 0.0; }
 
-  /// Fills @p out with the next frame. False at end of stream, before any loop.
   [[nodiscard]] virtual bool next(VideoFrame &out) = 0;
 
-  /// Seek back to the first frame.
   virtual void restart() = 0;
 
   [[nodiscard]] virtual bool seek(f64 target_seconds) {
@@ -78,8 +66,6 @@ public:
 /// interface, which AllocDeleter cannot. Same reason the audio DecoderPtr does.
 using SourcePtr = std::unique_ptr<FrameSource>;
 
-/// An animated test pattern: a diagonal luma sweep over a fixed chroma field.
-/// Endless; `next` never returns false.
 class SyntheticSource final : public FrameSource {
 public:
   SyntheticSource(u32 width, u32 height, f64 fps) noexcept;
@@ -117,10 +103,8 @@ public:
   [[nodiscard]] f64 duration() const noexcept {
     return m_source != nullptr ? m_source->duration() : 0.0;
   }
-  /// Emission over and, for a non-looping clip, the last frame reached.
   [[nodiscard]] bool finished() const noexcept { return m_finished; }
 
-  /// Advances the clock by @p dt seconds and returns the frame to show now, or
   [[nodiscard]] const VideoFrame *advance(f64 dt, i32 *budget = nullptr);
 
   [[nodiscard]] const VideoFrame *advance_to(f64 target, i32 *budget = nullptr);
@@ -143,4 +127,4 @@ private:
   bool m_eos = false;
 };
 
-} // namespace nxm::video
+}

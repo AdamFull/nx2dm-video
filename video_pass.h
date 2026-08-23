@@ -1,10 +1,5 @@
 #pragma once
 
-/**
- * @file video_pass.h
- * @brief The video quad, recorded into the frame (namespace nxm::video).
- */
-
 #include "video/video_source.h"
 
 #include "core/rendering/graph/render_graph.h"
@@ -18,14 +13,10 @@
 
 namespace nxm::video {
 
-/// Mirrors VideoPush in shaders/video.slang: vectors first, then scalars, so the
-/// std430 and this glm layout agree without padding. `luma`/`chroma` are the
-/// bindless indices of the NV12 planes; `luma_weights` is (kr, kb), from which
-/// the shader derives the full YCbCr->RGB; `full_range` picks the sample range.
 struct VideoPush {
   glm::vec4 rect{-1.f, -1.f, 1.f, 1.f};
   glm::vec2 uv_scale{1.f, 1.f};
-  glm::vec2 luma_weights{0.2126f, 0.0722f}; // BT.709 default
+  glm::vec2 luma_weights{0.2126f, 0.0722f};
   u32 luma = 0;
   u32 chroma = 0;
   u32 sampler_index = 0;
@@ -34,9 +25,6 @@ struct VideoPush {
 static_assert(sizeof(VideoPush) <= nxe::rhi::PUSH_CONSTANT_SIZE,
               "the video push block must fit the guaranteed push range");
 
-/// One quad to draw: the two NV12 plane textures, where to put it, and the
-/// colour it was decoded in. Every decoder - CPU or hardware - produces this,
-/// so there is a single draw.
 struct VideoDraw {
   glm::vec4 rect{-1.f, -1.f, 1.f, 1.f};
   glm::vec2 uv_scale{1.f, 1.f};
@@ -83,4 +71,4 @@ private:
   nxe::rhi::Format m_format = nxe::rhi::Format::Unknown;
 };
 
-} // namespace nxm::video
+}

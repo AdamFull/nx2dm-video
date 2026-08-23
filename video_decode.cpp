@@ -46,7 +46,6 @@ public:
 
   [[nodiscard]] bool next(VideoFrame &out) override {
     for (;;) {
-      // One decode can yield more than one showable image; drain them first.
       if (vpx_image_t *const img = vpx_codec_get_frame(&m_codec, &m_iter))
         return fill(out, img);
       m_iter = nullptr;
@@ -60,7 +59,7 @@ public:
       if (vpx_codec_decode(&m_codec, data, nx::cast<unsigned int>(len), nullptr,
                            0) != VPX_CODEC_OK) {
         nx::logw("video: VP9 decode error: {}", vpx_codec_error(&m_codec));
-        continue; // skip the bad packet rather than ending the stream
+        continue;
       }
     }
   }
@@ -114,8 +113,6 @@ public:
   WebmAv1Source &operator=(const WebmAv1Source &) = delete;
 
   [[nodiscard]] bool open(const nx::string_view path) {
-    // "V_AV01" is the Matroska codec id; some muxers (ffmpeg among them) write
-    // "V_AV1" instead, so accept either.
     if (!m_demux.open(path, "V_AV01", "V_AV1"))
       return false;
     libgav1::DecoderSettings settings;
@@ -158,7 +155,7 @@ public:
         continue;
       }
       if (buf == nullptr)
-        continue; // a decode-only frame (e.g. an altref): pull the next
+        continue;
       m_last_pts = pts;
       return fill(out, *buf);
     }
@@ -198,12 +195,9 @@ private:
   f64 m_last_pts = 0.0;
 };
 
-} // namespace
+}
 
 SourcePtr open_webm(const nx::string_view path) {
-  // Whichever codec the file's video track carries. Each source's open()
-  // declines a file whose track is not its codec, so trying VP9 then AV1 picks
-  // the right one without demuxing twice up front.
   auto vp9 = std::make_unique<WebmVp9Source>();
   if (vp9->open(path))
     return vp9;
@@ -219,4 +213,4 @@ bool webm_is_vp9(const nx::string_view path) {
   return demux.open(path, "V_VP9");
 }
 
-} // namespace nxm::video
+}

@@ -1,10 +1,5 @@
 #pragma once
 
-/**
- * @file video_demux.h
- * @brief WebM demux shared by every decode path (namespace nxm::video).
- */
-
 #include "video/video_source.h"
 
 #include "core/foundation/containers/blob.h"
@@ -75,8 +70,6 @@ public:
   WebmVideoDemux(const WebmVideoDemux &) = delete;
   WebmVideoDemux &operator=(const WebmVideoDemux &) = delete;
 
-  /// Opens @p path and selects the first video track whose codec id is
-  /// @p codec_id (or @p codec_id_alt, for muxers that spell it differently).
   [[nodiscard]] bool open(nx::string_view path, const char *codec_id,
                           const char *codec_id_alt = nullptr);
 
@@ -86,7 +79,6 @@ public:
   [[nodiscard]] f64 duration() const noexcept;
   [[nodiscard]] usize max_frame_size() const noexcept;
   [[nodiscard]] ColourInfo colour() const noexcept { return m_colour; }
-  /// The track's CodecPrivate (codec setup data), empty when it carries none.
   [[nodiscard]] std::span<const u8> codec_private() const noexcept {
     return {m_codec_private.data(), m_codec_private.size()};
   }
@@ -112,4 +104,4 @@ private:
   ColourInfo m_colour;
 };
 
-} // namespace nxm::video
+}

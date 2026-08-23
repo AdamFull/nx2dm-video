@@ -1,19 +1,3 @@
-/**
- * @file test_video_shader.cpp
- * @brief What the video shader does with an NV12 frame: that it converts to RGB
- * for the colour it was decoded in, and that the image is not upside down.
- *
- * Every decoder - CPU or hardware - resolves to one NV12 layout (a full-res R8
- * luma plane and a half-res R8G8 interleaved chroma plane), so there is one
- * shader and one draw. The orientation case is the one that cannot be reasoned
- * about safely: every set_viewport in this engine emits a negative-height Vulkan
- * viewport (vk_resources.cpp), so a full-screen quad's UVs have to account for
- * the flip or the frame renders inverted - and nothing but reading the pixels
- * back catches it.
- *
- * Skipped rather than failed on a machine with no usable device, like the rest
- * of the rendering suite.
- */
 
 #include "framework/nxtest.h"
 
@@ -29,13 +13,10 @@ namespace rhi = nxe::rhi;
 
 constexpr u32 TARGET = 8;
 
-// Mirrors VideoPush in shaders/video.slang: vectors first, then scalars, so the
-// std430 and this layout agree without padding. Plain arrays rather than glm so
-// the test needs nothing but the RHI.
 struct VideoPush {
   float rect[4] = {-1.f, -1.f, 1.f, 1.f};
   float uv_scale[2] = {1.f, 1.f};
-  float luma_weights[2] = {0.2126f, 0.0722f}; // BT.709 default
+  float luma_weights[2] = {0.2126f, 0.0722f};
   u32 luma = 0;
   u32 chroma = 0;
   u32 sampler_index = 0;
@@ -100,14 +81,11 @@ struct TestDevice {
   return tex;
 }
 
-// A full-resolution R8 luma plane.
 [[nodiscard]] rhi::TextureHandle make_luma(rhi::Device &device,
                                            const std::vector<u8> &y) {
   return upload(device, rhi::Format::R8_UNORM, TARGET, TARGET, TARGET, y, "luma");
 }
 
-// A half-resolution R8G8 chroma plane of one constant (Cb, Cr) - the NV12 shape
-// both decode paths produce.
 [[nodiscard]] rhi::TextureHandle make_chroma(rhi::Device &device, const u8 cb,
                                              const u8 cr) {
   const u32 cw = TARGET / 2;
@@ -125,8 +103,6 @@ struct Rendered {
   bool ok = false;
 };
 
-// Renders one full-screen video quad from the NV12 planes into an RGBA8 target
-// and reads it back. Leaves all handles for the caller to drop.
 [[nodiscard]] Rendered draw(rhi::Device &device, rhi::ShaderHandle shader,
                             rhi::TextureHandle luma, rhi::TextureHandle chroma,
                             rhi::TextureHandle target, rhi::SamplerHandle sampler,
@@ -205,7 +181,7 @@ struct Rendered {
   return (nx::cast<usize>(row) * TARGET + col) * 4;
 }
 
-} // namespace
+}
 
 TEST_CASE("video shader: a grey frame converts to grey (BT.709)") {
   TestDevice fixture;
@@ -217,8 +193,6 @@ TEST_CASE("video shader: a grey frame converts to grey (BT.709)") {
   if (!shader.valid())
     SKIP("shaders are not built in this configuration");
 
-  // Y = 220 everywhere, chroma neutral: a bright grey. Limited-range 709 puts
-  // it near (220-16)*255/219 = 237 on every channel, with no colour cast.
   const rhi::TextureHandle luma =
       make_luma(device, std::vector<u8>(TARGET * TARGET, 220u));
   const rhi::TextureHandle chroma = make_chroma(device, 128u, 128u);
@@ -238,7 +212,6 @@ TEST_CASE("video shader: a grey frame converts to grey (BT.709)") {
   CHECK(r.pixels.data[mid + 0] > 220u);
   CHECK(r.pixels.data[mid + 1] > 220u);
   CHECK(r.pixels.data[mid + 2] > 220u);
-  // Neutral chroma means the channels agree.
   const int rr = r.pixels.data[mid + 0];
   const int gg = r.pixels.data[mid + 1];
   const int bb = r.pixels.data[mid + 2];
@@ -262,10 +235,6 @@ TEST_CASE("video shader: the colour matrix and range change the result") {
   if (!shader.valid())
     SKIP("shaders are not built in this configuration");
 
-  // A mid grey with a red-ward Cr, chroma otherwise neutral. Red is
-  // Y + 2(1-kr)*Cr, so a smaller kr (BT.709) lifts it more than a larger one
-  // (BT.601); and limited range scales the samples where full range does not.
-  // The three encodings of the identical bytes must read back three reds.
   const rhi::TextureHandle luma =
       make_luma(device, std::vector<u8>(TARGET * TARGET, 128u));
   const rhi::TextureHandle chroma = make_chroma(device, 128u, 180u);
@@ -280,25 +249,23 @@ TEST_CASE("video shader: the colour matrix and range change the result") {
 
   const usize mid = texel(TARGET / 2, TARGET / 2);
 
-  // The readback buffer is reused between draws, so read each red before the
-  // next draw overwrites it.
   const Rendered a = draw(device, shader, luma, chroma, target, sampler, 0.2126f,
-                          0.0722f, 0); // BT.709 limited
+                          0.0722f, 0);
   REQUIRE(a.ok);
   const int r709 = a.pixels.data[mid + 0];
 
   const Rendered b = draw(device, shader, luma, chroma, target, sampler, 0.299f,
-                          0.114f, 0); // BT.601 limited
+                          0.114f, 0);
   REQUIRE(b.ok);
   const int r601 = b.pixels.data[mid + 0];
 
   const Rendered c = draw(device, shader, luma, chroma, target, sampler, 0.2126f,
-                          0.0722f, 1); // BT.709 full range
+                          0.0722f, 1);
   REQUIRE(c.ok);
   const int rfull = c.pixels.data[mid + 0];
 
-  CHECK(r709 > r601 + 4);            // the matrix is read, not assumed
-  CHECK(std::abs(r709 - rfull) > 4); // and so is the range
+  CHECK(r709 > r601 + 4);
+  CHECK(std::abs(r709 - rfull) > 4);
 
   device.destroy_texture(target);
   device.destroy_sampler(sampler);
@@ -317,13 +284,12 @@ TEST_CASE("video shader: the chroma channels convert, right way up") {
   if (!shader.valid())
     SKIP("shaders are not built in this configuration");
 
-  // Bright top half, dark bottom half; chroma pushes Cb high (blue-ward).
   std::vector<u8> y(nx::cast<usize>(TARGET) * TARGET, 16u);
   for (u32 row = 0; row < TARGET / 2; ++row)
     for (u32 col = 0; col < TARGET; ++col)
       y[nx::cast<usize>(row) * TARGET + col] = 235u;
   const rhi::TextureHandle luma = make_luma(device, y);
-  const rhi::TextureHandle chroma = make_chroma(device, 200u, 128u); // Cb high
+  const rhi::TextureHandle chroma = make_chroma(device, 200u, 128u);
   device.uploader().flush();
   REQUIRE(luma.valid());
   REQUIRE(chroma.valid());
@@ -336,11 +302,8 @@ TEST_CASE("video shader: the chroma channels convert, right way up") {
   const Rendered r = draw(device, shader, luma, chroma, target, sampler);
   REQUIRE(r.ok);
 
-  // In the dark-luma bottom, where chroma shows, high Cb pushes blue above red;
-  // a Cb/Cr swap would push red instead.
   const usize bot = texel(TARGET - 1, TARGET / 2);
   CHECK(int(r.pixels.data[bot + 2]) > int(r.pixels.data[bot + 0]) + 20);
-  // Green tracks luma (Cb barely touches it): bright top, dark bottom - upright.
   CHECK(r.pixels.data[texel(0, TARGET / 2) + 1] > 200u);
   CHECK(r.pixels.data[bot + 1] < 40u);
 

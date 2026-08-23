@@ -1,25 +1,17 @@
-// A decoded video frame is Y'CbCr 4:2:0, not RGB: a full-resolution luma plane
-// and a half-resolution interleaved chroma plane (NV12). This samples the two
-// and converts, drawing one quad into a screen rectangle given in NDC. The quad
-// is generated from the vertex id, so there is no vertex buffer - a full-screen
-// clip is just the rectangle (-1,-1)..(1,1). Every decoder - CPU or hardware -
-// resolves to this one layout, so there is one draw path.
 
 import bindless;
 
 // Vectors first, then scalars: that order is 8-aligned identically under the
 // shader's std430 and the C++ glm mirror, so neither side needs padding to guess.
 struct VideoPush {
-    /// Destination rectangle in NDC as (x0, y0, x1, y1). (-1,-1,1,1) is
-    /// full-screen.
     float4 rect;
     float2 uv_scale;
-    float2 luma_weights;  ///< (kr, kb): the colour matrix's luma weights.
+    float2 luma_weights;
 
-    uint luma;    ///< R8 luma plane.
-    uint chroma;  ///< R8G8 interleaved chroma (.r = Cb, .g = Cr).
+    uint luma;
+    uint chroma;
     uint sampler_index;
-    uint full_range;  ///< 0 = limited (broadcast) range, 1 = full.
+    uint full_range;
 };
 
 [[vk::push_constant]]

@@ -1,12 +1,3 @@
-/**
- * @file test_video_decode.cpp
- * @brief That a real .webm demuxes and decodes: the right size, the right frame
- * count, and that it can be played twice.
- *
- * The fixture is a 320x240 VP9 clip, 45 frames, made with ffmpeg (see the
- * module's tests/fixtures). These cases read it through the VFS exactly as the
- * runtime does.
- */
 
 #include "framework/nxtest.h"
 
@@ -38,8 +29,6 @@ struct MountedFixtures {
   MountedFixtures &operator=(const MountedFixtures &) = delete;
 };
 
-/// A source that counts how many frames were pulled from it, so a budget cap
-/// can be measured rather than inferred. Endless, so it never ends on its own.
 class CountingSource final : public nxm::video::FrameSource {
 public:
   explicit CountingSource(const f64 fps) noexcept : m_fps(fps) {}
@@ -119,7 +108,7 @@ private:
     if (n == 0)
       break;
     total += n;
-    if (total > nx::cast<u64>(48000) * 60) // runaway guard
+    if (total > nx::cast<u64>(48000) * 60)
       break;
   }
   return total;
@@ -130,13 +119,13 @@ private:
   int count = 0;
   while (src.next(frame)) {
     ++count;
-    if (count > 1000) // a runaway guard; the fixture is 45
+    if (count > 1000)
       break;
   }
   return count;
 }
 
-} // namespace
+}
 
 TEST_CASE("video decode: a VP9 webm opens at its true size") {
   const MountedFixtures fixtures;
@@ -152,7 +141,6 @@ TEST_CASE("video decode: a VP9 webm opens at its true size") {
 TEST_CASE("video decode: the codec peek tells VP9 from AV1 (hw path gate)") {
   const MountedFixtures fixtures;
   REQUIRE(fixtures.ok);
-  // The module uses this to keep AV1 off the VP9-only hardware path.
   CHECK(nxm::video::webm_is_vp9("/test.webm"));
   CHECK_FALSE(nxm::video::webm_is_vp9("/test_av1.webm"));
   CHECK_FALSE(nxm::video::webm_is_vp9("/nope.webm"));
@@ -162,8 +150,6 @@ TEST_CASE("video decode: an AV1 webm decodes through the same FrameSource") {
   const MountedFixtures fixtures;
   REQUIRE(fixtures.ok);
 
-  // open_webm dispatches on the track codec: this file is AV1, so it comes back
-  // a libgav1-backed source, indistinguishable to the caller from the VP9 one.
   const nxm::video::SourcePtr src = nxm::video::open_webm("/test_av1.webm");
   REQUIRE(src != nullptr);
   CHECK(src->width() == 320);
@@ -176,13 +162,11 @@ TEST_CASE("video decode: an AV1 webm decodes through the same FrameSource") {
   CHECK(first.height == 240);
   CHECK(first.y.size() == 320u * 240u);
   CHECK(first.cb.size() == 160u * 120u);
-  // The test pattern is strongly coloured, so a real decode is not flat grey.
   bool varies = false;
   for (usize i = 1; i < first.y.size() && !varies; ++i)
     varies = first.y[i] != first.y[0];
   CHECK(varies);
 
-  // The clip is 45 frames and, like the VP9 one, plays again from the top.
   const int count = 1 + decode_all(*src);
   CHECK(count == 45);
   src->restart();
@@ -193,26 +177,21 @@ TEST_CASE("video demux: re-opens for a second codec id on the same object") {
   const MountedFixtures fixtures;
   REQUIRE(fixtures.ok);
 
-  // The MediaCodec source tries VP9 then AV1 on one demux; the second open has
-  // to discard the first attempt's segment and read the track cleanly. Nothing
-  // else re-opens a demux, so this is where that contract is pinned.
   nxm::video::WebmVideoDemux demux;
-  CHECK_FALSE(demux.open("/test.webm", "V_VP8")); // right file, absent codec
-  REQUIRE(demux.open("/test.webm", "V_VP9"));      // re-open finds the real track
+  CHECK_FALSE(demux.open("/test.webm", "V_VP8"));
+  REQUIRE(demux.open("/test.webm", "V_VP9"));
   CHECK(demux.width() == 320);
   CHECK(demux.height() == 240);
 
   const u8 *data = nullptr;
   long len = 0;
   f64 pts = 0.0;
-  REQUIRE(demux.next(data, len, pts)); // and yields real packets after re-open
+  REQUIRE(demux.next(data, len, pts));
   CHECK(len > 0);
   CHECK(demux.max_frame_size() >= nx::cast<usize>(len));
 }
 
 TEST_CASE("MediaCodec planes: padded and interleaved input copies safely") {
-  // Two rows of three samples. Pixel stride two models an interleaved chroma
-  // plane; row stride six leaves the other channel between the samples.
   const u8 src[] = {1, 90, 2, 91, 3, 92, 4, 93, 5, 94, 6, 95};
   u8 dst[6] = {};
   REQUIRE(nxm::video::mediacodec_detail::copy_plane_checked(
@@ -224,7 +203,6 @@ TEST_CASE("MediaCodec planes: padded and interleaved input copies safely") {
 TEST_CASE("MediaCodec planes: inconsistent vendor bounds are rejected") {
   const u8 src[12] = {};
   u8 dst[6] = {};
-  // Eleven source bytes are required: row 1 + sample 2 reaches byte ten.
   CHECK_FALSE(nxm::video::mediacodec_detail::copy_plane_checked(
       dst, sizeof(dst), 3, src, 10, 6, 2, 3, 2));
   CHECK_FALSE(nxm::video::mediacodec_detail::copy_plane_checked(
@@ -236,11 +214,8 @@ TEST_CASE("MediaCodec planes: inconsistent vendor bounds are rejected") {
 }
 
 TEST_CASE("video frame: chroma interleaves into one NV12 R8G8 plane") {
-  // The CPU decode path produces three planes; the draw wants the NV12 shape the
-  // hardware path decodes to, so Cb,Cr interleave into one R8G8 plane. With the
-  // shader test proving that layout converts, this pins the other half.
   nxm::video::VideoFrame f;
-  f.width = 4; // chroma is 2x2 = 4 texels
+  f.width = 4;
   f.height = 4;
   f.cb = {10, 11, 12, 13};
   f.cr = {20, 21, 22, 23};
@@ -248,7 +223,6 @@ TEST_CASE("video frame: chroma interleaves into one NV12 R8G8 plane") {
   nx::vector<u8> out;
   nxm::video::interleave_chroma(f, out);
   REQUIRE(out.size() == 8);
-  // Each texel is (Cb, Cr); a swap would put Cr first.
   CHECK(out[0] == 10);
   CHECK(out[1] == 20);
   CHECK(out[2] == 11);
@@ -256,7 +230,6 @@ TEST_CASE("video frame: chroma interleaves into one NV12 R8G8 plane") {
   CHECK(out[6] == 13);
   CHECK(out[7] == 23);
 
-  // Short chroma leaves the output empty rather than overreading.
   nxm::video::VideoFrame bad;
   bad.width = 4;
   bad.height = 4;
@@ -273,7 +246,6 @@ TEST_CASE("video decode: every frame of the clip comes out, twice") {
   const nxm::video::SourcePtr src = nxm::video::open_webm("/test.webm");
   REQUIRE(src != nullptr);
 
-  // First frame carries a full-size I420 luma plane and neutral-ish content.
   nxm::video::VideoFrame first;
   REQUIRE(src->next(first));
   CHECK(first.width == 320);
@@ -284,7 +256,6 @@ TEST_CASE("video decode: every frame of the clip comes out, twice") {
   int count = 1 + decode_all(*src);
   CHECK(count == 45);
 
-  // Playable again from the top: the decoder resets to the opening keyframe.
   src->restart();
   CHECK(decode_all(*src) == 45);
 }
@@ -293,8 +264,6 @@ TEST_CASE("video decode: colour matrix and range come from the container") {
   const MountedFixtures fixtures;
   REQUIRE(fixtures.ok);
 
-  // test_bt601_full.webm is tagged BT.601 (smpte170m) full-range: the frame must
-  // carry that, not the BT.709-limited default the code assumed before.
   const nxm::video::SourcePtr tagged =
       nxm::video::open_webm("/test_bt601_full.webm");
   REQUIRE(tagged != nullptr);
@@ -303,8 +272,6 @@ TEST_CASE("video decode: colour matrix and range come from the container") {
   CHECK(frame.colour.matrix == nxm::video::ColourMatrix::BT601);
   CHECK(frame.colour.full_range);
 
-  // The untagged 320x240 fixture leaves the matrix unspecified, so the
-  // resolution heuristic decides: SD is BT.601, and its range is broadcast.
   const nxm::video::SourcePtr untagged = nxm::video::open_webm("/test.webm");
   REQUIRE(untagged != nullptr);
   nxm::video::VideoFrame sd;
@@ -317,14 +284,11 @@ TEST_CASE("video clip: a .nxvid resolves to its source and loop") {
   const MountedFixtures fixtures;
   REQUIRE(fixtures.ok);
 
-  // test_clip.nxvid names /test.webm and turns looping off; both must come back
-  // from the descriptor, not the struct defaults (loop defaults to true).
   nxm::video::VideoClip clip;
   REQUIRE(nxm::video::load_video_clip("/test_clip.nxvid", clip));
   CHECK(clip.source == "/test.webm");
   CHECK_FALSE(clip.loop);
 
-  // A descriptor that will not read is a clean false, not a crash.
   nxm::video::VideoClip missing;
   CHECK_FALSE(nxm::video::load_video_clip("/nope.nxvid", missing));
 }
@@ -336,31 +300,28 @@ TEST_CASE("video decode: a missing clip is a null source, not a crash") {
 }
 
 TEST_CASE("video pacing: the frame shown is the one the clock has reached") {
-  // A source at 10 fps: frame k is due at k/10 s. The pacer must show the
-  // newest frame whose PTS the clock has passed, and no newer.
   nxm::video::PacedPlayback pacer;
   pacer.reset(std::make_unique<nxm::video::SyntheticSource>(16, 16, 10.0),
               false);
 
   const nxm::video::VideoFrame *f = pacer.advance(0.0);
   REQUIRE(f != nullptr);
-  CHECK(f->pts < 0.001); // frame 0
+  CHECK(f->pts < 0.001);
 
-  f = pacer.advance(0.05); // clock 0.05: still frame 0
+  f = pacer.advance(0.05);
   REQUIRE(f != nullptr);
   CHECK(f->pts < 0.001);
 
-  f = pacer.advance(0.05); // clock 0.10: frame 1
+  f = pacer.advance(0.05);
   REQUIRE(f != nullptr);
   CHECK(f->pts > 0.09);
   CHECK(f->pts < 0.11);
 
-  f = pacer.advance(0.25); // clock 0.35: frame 3, having dropped 2
+  f = pacer.advance(0.25);
   REQUIRE(f != nullptr);
   CHECK(f->pts > 0.29);
   CHECK(f->pts < 0.31);
 
-  // A held clock shows the same frame, not the next.
   const nxm::video::VideoFrame *g = pacer.advance(0.0);
   REQUIRE(g != nullptr);
   CHECK(g->pts > 0.29);
@@ -374,7 +335,7 @@ TEST_CASE("video pacing: absolute targets stay monotonic across a loop") {
   pacer.reset(std::move(src), true);
 
   REQUIRE(pacer.advance_to(0.0) != nullptr);
-  REQUIRE(pacer.advance_to(0.31) != nullptr); // just into the second pass
+  REQUIRE(pacer.advance_to(0.31) != nullptr);
   REQUIRE(raw->restarts == 1);
   const int after_wrap = raw->decodes;
 
@@ -382,7 +343,7 @@ TEST_CASE("video pacing: absolute targets stay monotonic across a loop") {
   REQUIRE(next != nullptr);
   CHECK(next->pts < 0.1);
   CHECK(raw->restarts == 1);
-  CHECK(raw->decodes == after_wrap); // did not replay a whole clip for 10 ms
+  CHECK(raw->decodes == after_wrap);
 }
 
 TEST_CASE("video pacing: a loop preserves a large target's cycle position") {
@@ -391,8 +352,6 @@ TEST_CASE("video pacing: a loop preserves a large target's cycle position") {
   nxm::video::PacedPlayback pacer;
   pacer.reset(std::move(src), true);
 
-  // Three frames at 10 Hz make a 0.3 s cycle. 0.55 s is 0.25 s into its second
-  // pass, where frame two (PTS 0.2) is still being shown.
   const nxm::video::VideoFrame *const frame = pacer.advance_to(0.55);
   REQUIRE(frame != nullptr);
   CHECK(std::fabs(frame->pts - 0.2) < 1e-9);
@@ -431,20 +390,16 @@ TEST_CASE("video budget: a decode cap holds decodes and catches up over calls") 
   nxm::video::PacedPlayback pacer;
   pacer.reset(std::move(src), false);
 
-  // Prime uncapped: the first frame and its successor, two decodes.
   REQUIRE(pacer.advance(0.0, nullptr) != nullptr);
   const int primed = raw->decodes;
 
-  // One second is 60 frames due; a budget of 3 decodes at most three of them.
   i32 budget = 3;
   const nxm::video::VideoFrame *f = pacer.advance(1.0, &budget);
   REQUIRE(f != nullptr);
   CHECK(raw->decodes - primed == 3);
   CHECK(budget == 0);
-  CHECK(f->pts < 0.1); // a few frames in, nowhere near the whole second
+  CHECK(f->pts < 0.1);
 
-  // The clock is already a second in; a further budgeted call keeps catching up
-  // rather than stalling, which is what keeps a starved clip moving.
   const f64 before = f->pts;
   i32 more = 3;
   f = pacer.advance(0.0, &more);
@@ -461,7 +416,7 @@ TEST_CASE("video budget: no cap catches up to the clock in one call") {
 
   const nxm::video::VideoFrame *f = pacer.advance(1.0, nullptr);
   REQUIRE(f != nullptr);
-  CHECK(f->pts > 0.9); // reached the frame a full second in
+  CHECK(f->pts > 0.9);
   CHECK(raw->decodes > 50);
 }
 
@@ -469,7 +424,6 @@ TEST_CASE("video audio: the Opus track decodes to 48 kHz PCM, and has sound") {
   const MountedFixtures fixtures;
   REQUIRE(fixtures.ok);
 
-  // test_audio.webm is the video fixture plus a 440 Hz sine on an Opus track.
   nxe::audio::DecoderPtr audio =
       nxm::video::open_webm_opus("/test_audio.webm");
   REQUIRE(audio != nullptr);
@@ -481,26 +435,23 @@ TEST_CASE("video audio: the Opus track decodes to 48 kHz PCM, and has sound") {
 
   const u64 first = audio->read(buf.data(), 48000);
   CHECK(first > 0);
-  // A sine, not silence: something well clear of the noise floor comes out.
   i16 peak = 0;
   for (u64 i = 0; i < first * ch; ++i)
     peak = nx::max<i16>(peak, nx::cast<i16>(std::abs(nx::cast<int>(buf[i]))));
   CHECK(peak > 1000);
 
-  // The whole ~3 s clip decodes and then ends.
   u64 total = first;
   for (;;) {
     const u64 n = audio->read(buf.data(), 48000);
     if (n == 0)
       break;
     total += n;
-    if (total > nx::cast<u64>(48000) * 10) // runaway guard
+    if (total > nx::cast<u64>(48000) * 10)
       break;
   }
-  CHECK(total > 120000); // at least ~2.5 s of the 3 s clip
-  CHECK(total < 180000); // and not much past 3 s
+  CHECK(total > 120000);
+  CHECK(total < 180000);
 
-  // A missing track is a null decoder, and the video fixture has no audio.
   CHECK(nxm::video::open_webm_opus("/test.webm") == nullptr);
   CHECK(nxm::video::open_webm_opus("/nope.webm") == nullptr);
 }
@@ -523,7 +474,7 @@ TEST_CASE("video audio: a Vorbis track decodes to PCM, and has sound") {
   i16 peak = 0;
   for (u64 i = 0; i < first * ch; ++i)
     peak = nx::max<i16>(peak, nx::cast<i16>(std::abs(nx::cast<int>(buf[i]))));
-  CHECK(peak > 1000); // a 440 Hz sine, not silence
+  CHECK(peak > 1000);
 
   u64 total = first;
   for (;;) {
@@ -534,11 +485,9 @@ TEST_CASE("video audio: a Vorbis track decodes to PCM, and has sound") {
     if (total > nx::cast<u64>(48000) * 10)
       break;
   }
-  CHECK(total > 100000); // ~2.5 s at 48 kHz
+  CHECK(total > 100000);
   CHECK(total < 140000);
 
-  // The codec-agnostic opener picks whichever track the file carries, and each
-  // codec's opener declines the other's file.
   CHECK(nxm::video::open_webm_audio("/test_vorbis.webm") != nullptr);
   CHECK(nxm::video::open_webm_audio("/test_audio.webm") != nullptr);
   CHECK(nxm::video::open_webm_vorbis("/test_audio.webm") == nullptr);
@@ -561,22 +510,18 @@ TEST_CASE("video audio: an audio track seeks to a time, and home again") {
     REQUIRE(full != nullptr);
     const u64 rate = full->format().sample_rate;
     const u64 total = count_samples(*full);
-    REQUIRE(total > rate); // at least a second to seek within
+    REQUIRE(total > rate);
 
     const nxe::audio::DecoderPtr dec = clip.open(clip.path);
     REQUIRE(dec != nullptr);
     const u64 target = total / 2;
     REQUIRE(dec->seek(target));
 
-    // Landed near the target: the tail is about (total - target). The tolerance
-    // is a tenth of a second, which covers block alignment and the reset's
-    // convergence region.
     const u64 remaining = count_samples(*dec);
     const u64 expected = total - target;
     CHECK(remaining + rate / 10 > expected);
     CHECK(remaining < expected + rate / 10);
 
-    // Seeking home restores the whole track.
     REQUIRE(dec->seek(0));
     CHECK(count_samples(*dec) + rate / 10 > total);
   }
@@ -586,16 +531,14 @@ TEST_CASE("video pacing: a looping clip never finishes; a plain one does") {
   const MountedFixtures fixtures;
   REQUIRE(fixtures.ok);
 
-  // Looping: run well past the ~3 s clip and it is still producing frames.
   nxm::video::PacedPlayback looping;
   looping.reset(nxm::video::open_webm("/test.webm"), true);
   REQUIRE(looping.advance(0.0) != nullptr);
-  for (int i = 0; i < 200; ++i) // 10 s
+  for (int i = 0; i < 200; ++i)
     (void)looping.advance(0.05);
   CHECK(!looping.finished());
   CHECK(looping.advance(0.05) != nullptr);
 
-  // Not looping: it finishes and holds the last frame.
   nxm::video::PacedPlayback once;
   once.reset(nxm::video::open_webm("/test.webm"), false);
   const nxm::video::VideoFrame *last = nullptr;
@@ -610,8 +553,6 @@ TEST_CASE("video seek: keyframe-accurate, and matches linear playback") {
   const MountedFixtures fixtures;
   REQUIRE(fixtures.ok);
 
-  // Play the clip through once to learn its timeline and keep one frame to
-  // compare a sought copy of it against, pixel for pixel.
   constexpr usize K = 20;
   nx::vector<f64> pts;
   nxm::video::VideoFrame reference;
@@ -633,9 +574,6 @@ TEST_CASE("video seek: keyframe-accurate, and matches linear playback") {
   pacer.reset(nxm::video::open_webm("/test.webm"), false);
   REQUIRE(pacer.advance(0.0) != nullptr);
 
-  // A forward seek lands on the frame at that time - and decodes it correctly,
-  // which only a reset to the right keyframe gives: the pixels must match the
-  // ones the linear pass produced for the same frame.
   REQUIRE(pacer.seek(pts[K]));
   const nxm::video::VideoFrame *got = pacer.advance(0.0);
   REQUIRE(got != nullptr);
@@ -646,13 +584,11 @@ TEST_CASE("video seek: keyframe-accurate, and matches linear playback") {
   CHECK(same(got->cb, reference.cb));
   CHECK(same(got->cr, reference.cr));
 
-  // Seeking home returns the first frame.
   REQUIRE(pacer.seek(0.0));
   got = pacer.advance(0.0);
   REQUIRE(got != nullptr);
   CHECK(got->pts < pts[1]);
 
-  // Seeking past the end holds the last frame rather than failing.
   REQUIRE(pacer.seek(pts.back() + 10.0));
   got = pacer.advance(0.0);
   REQUIRE(got != nullptr);

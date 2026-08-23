@@ -16,27 +16,27 @@ namespace {
       c != nullptr ? c->range : mkvparser::Colour::kValueNotPresent;
 
   switch (mc) {
-  case 1: // BT.709
+  case 1:
     out.matrix = ColourMatrix::BT709;
     break;
-  case 4: // FCC
-  case 5: // BT.470BG (BT.601 625)
-  case 6: // SMPTE 170M (BT.601 525)
+  case 4:
+  case 5:
+  case 6:
     out.matrix = ColourMatrix::BT601;
     break;
-  case 9:  // BT.2020 non-constant luminance
-  case 10: // BT.2020 constant luminance
+  case 9:
+  case 10:
     out.matrix = ColourMatrix::BT2020;
     break;
-  default: // unspecified or absent
+  default:
     out.matrix = height >= 720 ? ColourMatrix::BT709 : ColourMatrix::BT601;
     break;
   }
-  out.full_range = range == 2; // 2 = full; 1 = broadcast; 0/absent = broadcast
+  out.full_range = range == 2;
   return out;
 }
 
-} // namespace
+}
 
 bool WebmVideoDemux::open(const nx::string_view path, const char *const codec_id,
                           const char *const codec_id_alt) {
@@ -48,8 +48,6 @@ bool WebmVideoDemux::open(const nx::string_view path, const char *const codec_id
   m_bytes = std::move(*bytes);
   m_reader = MemoryReader(m_bytes.data(), nx::cast<long long>(m_bytes.size()));
 
-  // Re-openable: a caller may try one codec id, fail to find its track, and try
-  // another on the same demux (the MediaCodec source does, VP9 then AV1).
   delete m_segment;
   m_segment = nullptr;
   m_codec_private.clear();
@@ -166,12 +164,12 @@ bool WebmVideoDemux::seek(const f64 target_seconds) {
   }
 
   if (key_entry == nullptr) {
-    restart(); // target before the first keyframe: the start is the answer
+    restart();
     return true;
   }
   m_cluster = key_cluster;
   m_entry = key_entry;
-  m_at_entry = true; // next() decodes this block before advancing
+  m_at_entry = true;
   return true;
 }
 
@@ -179,7 +177,7 @@ bool WebmVideoDemux::next(const u8 *&data, long &len, f64 &pts) {
   while (m_cluster != nullptr && !m_cluster->EOS()) {
     long status = 0;
     if (m_at_entry) {
-      m_at_entry = false; // a seek left m_entry on the block to decode next
+      m_at_entry = false;
     } else if (m_entry == nullptr) {
       status = m_cluster->GetFirst(m_entry);
     } else {
@@ -212,4 +210,4 @@ bool WebmVideoDemux::next(const u8 *&data, long &len, f64 &pts) {
   return false;
 }
 
-} // namespace nxm::video
+}

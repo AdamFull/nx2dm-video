@@ -1,10 +1,5 @@
 #pragma once
 
-/**
- * @file video_place.h
- * @brief Placing a clip's quad (namespace nxm::video).
- */
-
 #include "core/foundation/core/foundation.h"
 
 #include <glm/vec2.hpp>
@@ -23,4 +18,4 @@ namespace nxm::video {
                    (world.z - eye.x) * inv_w, (world.w - eye.y) * inv_h);
 }
 
-} // namespace nxm::video
+}

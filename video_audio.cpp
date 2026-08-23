@@ -14,9 +14,6 @@
 namespace nxm::video {
 namespace {
 
-/// mkvparser over the in-memory file, so it works inside an APK. Same shape as
-/// the video side's reader; kept local rather than shared because it is fifteen
-/// lines and sharing it would couple the two decoders' translation units.
 class MemoryReader final : public mkvparser::IMkvReader {
 public:
   MemoryReader(const u8 *data, long long size) noexcept
@@ -98,10 +95,9 @@ public:
             ? nx::cast<u64>(nx::cast<f64>(duration) * OPUS_RATE / 1e9)
             : 0;
 
-    // OpusHead's pre-skip (bytes 10-11, little-endian): priming samples the
-    // encoder added that must be dropped from the front, or the whole track
-    // plays that many samples early. opusfile does this for the file path; here
-    // it is ours to do.
+    // OpusHead's pre-skip (bytes 10-11, little-endian): priming samples the encoder added that must
+    // be dropped from the front, or the whole track plays that many samples early. opusfile does
+    // this for the file path; here it is ours to do.
     size_t private_size = 0;
     const unsigned char *const priv = audio->GetCodecPrivate(private_size);
     if (priv != nullptr && private_size >= 12)
@@ -115,8 +111,6 @@ public:
       nx::logw("video: cannot init Opus decoder ({})", error);
       return false;
     }
-    // Off the stack: this runs on a scheduler worker whose stack is not the
-    // main thread's, and a 20 KB decode buffer per call is how it overflows.
     m_pcm.resize(nx::cast<usize>(OPUS_MAX_FRAME) * MAX_CHANNELS);
     m_cluster = m_segment->GetFirst();
     return true;
@@ -142,7 +136,7 @@ public:
         continue;
       }
       if (!decode_next())
-        break; // end of stream
+        break;
     }
     return produced;
   }
@@ -160,8 +154,6 @@ public:
       const long long target = nx::cast<long long>(nx::cast<f64>(frame) /
                                                    OPUS_RATE * 1e9);
       if (locate(target, block_ns)) {
-        // Drop from the block's start to the exact target; the decoder converges
-        // over the first few ms after a reset, which the drop mostly hides.
         const long long block_frame =
             nx::cast<long long>(nx::cast<f64>(block_ns) * OPUS_RATE / 1e9);
         m_pre_skip_remaining =
@@ -170,8 +162,6 @@ public:
         return true;
       }
     }
-    // Frame zero, or a target before the first block: play from the start,
-    // honouring the encoder's own pre-skip again.
     m_pre_skip_remaining = m_pre_skip;
     m_block = nullptr;
     m_entry = nullptr;
@@ -231,7 +221,7 @@ private:
     const int got = opus_decode(m_opus, data, nx::cast<opus_int32>(len),
                                 m_pcm.data(), OPUS_MAX_FRAME, 0);
     if (got <= 0)
-      return true; // skip a bad packet, try the next
+      return true;
 
     const u32 ch = m_format.channels;
     u32 samples = nx::cast<u32>(got); // per channel
@@ -250,8 +240,6 @@ private:
     return true;
   }
 
-  // Yields the next Opus packet on the audio track, honouring block lacing
-  // (Opus routinely stores several packets in one block). False at end.
   bool next_packet(const u8 *&data, long &len) {
     for (;;) {
       if (m_block != nullptr && m_frame_index < m_block->GetFrameCount()) {
@@ -310,7 +298,7 @@ private:
   u32 m_pre_skip_remaining = 0;
 
   nx::vector<u8> m_packet;
-  nx::vector<i16> m_pcm; // opus_decode target; sized once, never on the stack
+  nx::vector<i16> m_pcm;
   nx::vector<i16> m_leftover;
   usize m_leftover_pos = 0;
 };
@@ -438,7 +426,6 @@ public:
   }
 
 private:
-  // As the Opus decoder's, over this track's blocks.
   bool locate(const long long target_ns, long long &block_ns) {
     const mkvparser::Cluster *fc = nullptr;
     const mkvparser::BlockEntry *fe = nullptr;
@@ -533,7 +520,7 @@ private:
     op.granulepos = -1;
     op.packetno = m_packetno++;
     if (vorbis_synthesis(&m_vb, &op) != 0)
-      return true; // skip a packet libvorbis will not take, try the next
+      return true;
     vorbis_synthesis_blockin(&m_vd, &m_vb);
 
     const u32 ch = m_format.channels;
@@ -541,7 +528,6 @@ private:
     m_leftover_pos = 0;
     float **pcm = nullptr;
     for (int got; (got = vorbis_synthesis_pcmout(&m_vd, &pcm)) > 0;) {
-      // A seek lands on a block start; drop the frames between it and the target.
       int start = 0;
       if (m_drop > 0) {
         start = nx::cast<int>(nx::min<u64>(m_drop, nx::cast<u64>(got)));
@@ -621,13 +607,13 @@ private:
 
   nxe::audio::SoundFormat m_format;
   long long m_track_number = 0;
-  u64 m_drop = 0; // frames to discard after a seek, from the block start to it
+  u64 m_drop = 0;
   nx::vector<u8> m_packet;
   nx::vector<i16> m_leftover;
   usize m_leftover_pos = 0;
 };
 
-} // namespace
+}
 
 nxe::audio::DecoderPtr open_webm_opus(const nx::string_view path) {
   auto decoder = std::make_unique<WebmOpusDecoder>();
@@ -649,4 +635,4 @@ nxe::audio::DecoderPtr open_webm_audio(const nx::string_view path) {
   return open_webm_vorbis(path);
 }
 
-} // namespace nxm::video
+}

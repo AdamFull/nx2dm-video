@@ -25,15 +25,12 @@ bool SyntheticSource::next(VideoFrame &out) {
   out.cb.resize(nx::cast<usize>(cw) * ch);
   out.cr.resize(nx::cast<usize>(cw) * ch);
 
-  // A luma ramp that slides diagonally with time, in limited range [16, 235].
   const u32 t = nx::cast<u32>(m_frame * 4);
   for (u32 yy = 0; yy < h; ++yy)
     for (u32 xx = 0; xx < w; ++xx)
       out.y[nx::cast<usize>(yy) * w + xx] =
           nx::cast<u8>(16 + ((xx + yy + t) % 220));
 
-  // A static chroma field: Cb along x, Cr along y. Cr rising downward makes the
-  // bottom of the image red, which is the orientation check.
   for (u32 yy = 0; yy < ch; ++yy)
     for (u32 xx = 0; xx < cw; ++xx) {
       out.cb[nx::cast<usize>(yy) * cw + xx] =
@@ -114,7 +111,7 @@ const VideoFrame *PacedPlayback::advance(const f64 dt, i32 *const budget) {
   for (;;) {
     if (!m_has_current) {
       if (!avail())
-        return nullptr; // not primed and no budget: nothing to show yet
+        return nullptr;
       spend();
       if (!m_source->next(m_current)) {
         m_eos = true;
@@ -131,7 +128,7 @@ const VideoFrame *PacedPlayback::advance(const f64 dt, i32 *const budget) {
 
     if (!m_has_next && !m_eos) {
       if (!avail())
-        break; // hold the current frame; refill once budget frees
+        break;
       spend();
       if (m_source->next(m_next))
         m_has_next = true;
@@ -139,8 +136,6 @@ const VideoFrame *PacedPlayback::advance(const f64 dt, i32 *const budget) {
         m_eos = true;
     }
 
-    // Drop a frame the clock has already passed; its replacement decodes on the
-    // next turn of the loop.
     if (m_has_next && m_next.pts <= m_clock) {
       std::swap(m_current, m_next);
       m_has_next = false;
@@ -148,22 +143,17 @@ const VideoFrame *PacedPlayback::advance(const f64 dt, i32 *const budget) {
     }
 
     if (m_has_next || !m_eos)
-      break; // future frame in hand, or a decode merely deferred for budget
+      break;
 
     if (!m_looping) {
-      m_finished = true; // hold the last frame
+      m_finished = true;
       break;
     }
-    // EOS is discovered while looking one frame ahead. The last frame still
-    // owns one nominal frame interval, so hold it until that interval expires
-    // rather than wrapping as soon as it is decoded.
     const f64 frame_time = 1.0 / nx::max(m_source->frame_rate(), 1.0);
     const f64 cycle = m_current.pts + frame_time;
     if (m_clock + 1e-9 < cycle)
       break;
 
-    // Preserve overshoot at the wrap. Resetting to zero makes a large absolute
-    // target show frame zero regardless of where it lies within the next pass.
     m_clock = cycle > 0.0 ? std::fmod(m_clock, cycle) : 0.0;
     m_source->restart();
     m_has_current = false;
@@ -174,4 +164,4 @@ const VideoFrame *PacedPlayback::advance(const f64 dt, i32 *const budget) {
   return m_has_current ? &m_current : nullptr;
 }
 
-} // namespace nxm::video
+}

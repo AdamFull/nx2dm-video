@@ -1,9 +1,3 @@
-# WebM video playback as a module. See docs/video.md.
-#
-# The option is declared here rather than left to nx_module() because the codecs
-# have to be fetched and built before the module can link them, and a build with
-# the module off should not fetch libvpx/libwebm at all. Same reason Live2D
-# declares its own.
 
 option(NX_MODULE_VIDEO "Build WebM video playback" OFF)
 if (NOT NX_MODULE_VIDEO)
@@ -22,8 +16,6 @@ nx_module(video
         ASSETS assets)
 
 if (ANDROID)
-    # The hardware decode path: NDK MediaCodec (mediandk) into I420, drawn by the
-    # same FrameSource as the CPU decoder. log for diagnostics.
     target_link_libraries(nx_module_video PUBLIC mediandk log)
     set_source_files_properties(video_mediacodec.cpp PROPERTIES
             COMPILE_DEFINITIONS __ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__)

@@ -1,11 +1,5 @@
 #pragma once
 
-/**
- * @file video_hw.h
- * @brief The desktop hardware-decode source: Vulkan Video behind the shared
- * GpuVideoSource interface (namespace nxm::video).
- */
-
 #include "video/video_gpu.h"
 
 #include "core/foundation/strings/utf8_string_view.h"
@@ -39,4 +33,4 @@ private:
   std::unique_ptr<Impl> m;
 };
 
-} // namespace nxm::video
+}

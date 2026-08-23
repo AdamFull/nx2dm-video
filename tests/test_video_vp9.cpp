@@ -1,13 +1,3 @@
-/**
- * @file test_video_vp9.cpp
- * @brief The RHI's VP9 uncompressed-header parser, checked against libvpx.
- *
- * The parser is what feeds a Vulkan Video decode: it turns a frame's leading
- * bytes into the Std structs and the offsets that split the frame. libvpx is the
- * oracle - it decodes the same raw frames and reports their true size and key
- * status, and the parser must agree. The frames come straight off the fixture
- * .webm through libwebm, the compressed bytes the hardware would also see.
- */
 
 #include "framework/nxtest.h"
 
@@ -61,8 +51,6 @@ struct RawFrame {
   bool key = false;
 };
 
-// Pull the first `want` compressed VP9 frames off the fixture, raw - the same
-// bytes a hardware decoder is handed.
 [[nodiscard]] std::vector<RawFrame> read_frames(const char *path,
                                                 std::vector<u8> &file_backing,
                                                 const usize want) {
@@ -134,8 +122,6 @@ struct RawFrame {
   return frames;
 }
 
-// Decode one raw frame with libvpx and report its size - the oracle the parser
-// is measured against.
 struct VpxDims {
   bool ok = false;
   u32 width = 0;
@@ -172,9 +158,6 @@ struct VpxLuma {
   std::vector<u8> y;
 };
 
-// libvpx's luma for the frame reached after decoding frames[0..upto], packed
-// tightly. VP9 is a normative integer decoder, so this is exactly what a
-// conformant hardware decoder must produce.
 [[nodiscard]] VpxLuma vpx_decode_luma(const std::vector<RawFrame> &frames,
                                       const usize upto) {
   VpxLuma luma;
@@ -220,7 +203,7 @@ struct TestDevice {
   TestDevice &operator=(const TestDevice &) = delete;
 };
 
-} // namespace
+}
 
 TEST_CASE("vp9 parse: the keyframe header agrees with libvpx on size and type") {
   std::vector<u8> backing;
@@ -238,8 +221,6 @@ TEST_CASE("vp9 parse: the keyframe header agrees with libvpx on size and type") 
   CHECK(header.picture.profile == STD_VIDEO_VP9_PROFILE_0);
   CHECK(header.picture.flags.show_frame == 1u);
 
-  // The fixture is 320x240; the parser must reach that through the sync code and
-  // colour config to frame_size, and libvpx confirms the same numbers.
   const VpxDims dims = vpx_decode_dims(frames, 0);
   REQUIRE(dims.ok);
   CHECK(dims.width == 320u);
@@ -247,16 +228,11 @@ TEST_CASE("vp9 parse: the keyframe header agrees with libvpx on size and type") 
   CHECK(header.frame_width == dims.width);
   CHECK(header.frame_height == dims.height);
 
-  // The three offsets partition the frame: an uncompressed header, then a
-  // non-empty compressed header, then tiles, all inside the frame.
   CHECK(header.uncompressed_header_size > 0u);
   CHECK(header.compressed_header_size > 0u);
-  // Strictly less: tiles always follow, so the two headers cannot fill the
-  // whole frame.
   CHECK(header.uncompressed_header_size + header.compressed_header_size <
         frames[0].bytes.size());
 
-  // 4:2:0, 8-bit - the only profile-0 shape.
   CHECK(header.color.BitDepth == 8u);
   CHECK(header.color.subsampling_x == 1u);
   CHECK(header.color.subsampling_y == 1u);
@@ -268,8 +244,6 @@ TEST_CASE("vp9 parse: an inter frame parses as non-key with a whole header") {
       read_frames(NX_VIDEO_FIXTURE_DIR "/test.webm", backing, 6);
   REQUIRE(frames.size() >= 2);
 
-  // The keyframe's size seeds every reference slot, which is what an inter frame
-  // that inherits its size reads back.
   rhi::Vp9FrameHeader key;
   REQUIRE(rhi::parse_vp9_frame_header(frames[0].bytes.data(),
                                       static_cast<u32>(frames[0].bytes.size()),
@@ -281,7 +255,6 @@ TEST_CASE("vp9 parse: an inter frame parses as non-key with a whole header") {
     ref_h[i] = key.frame_height;
   }
 
-  // Find the first non-key frame and parse it.
   usize inter = 0;
   for (usize i = 1; i < frames.size(); ++i)
     if (!frames[i].key) {
@@ -297,8 +270,6 @@ TEST_CASE("vp9 parse: an inter frame parses as non-key with a whole header") {
   CHECK(header.valid);
   CHECK(header.picture.frame_type == STD_VIDEO_VP9_FRAME_TYPE_NON_KEY);
 
-  // Reaching a sane header_size_in_bytes means the whole uncompressed header -
-  // loop filter, quant, segmentation, tiles - parsed without drifting.
   CHECK(header.compressed_header_size > 0u);
   CHECK(header.uncompressed_header_size + header.compressed_header_size <
         frames[inter].bytes.size());
@@ -308,10 +279,8 @@ TEST_CASE("vp9 parse: every frame of the clip parses, header inside the frame") 
   std::vector<u8> backing;
   const std::vector<RawFrame> frames =
       read_frames(NX_VIDEO_FIXTURE_DIR "/test.webm", backing, 1000);
-  REQUIRE(frames.size() >= 40); // the fixture is 45
+  REQUIRE(frames.size() >= 40);
 
-  // Track reference sizes as the decoder would, so inter frames that inherit a
-  // size read it back correctly; a keyframe refreshes all eight slots.
   u32 ref_w[8] = {};
   u32 ref_h[8] = {};
   for (const RawFrame &frame : frames) {
@@ -319,12 +288,6 @@ TEST_CASE("vp9 parse: every frame of the clip parses, header inside the frame") 
     REQUIRE(rhi::parse_vp9_frame_header(frame.bytes.data(),
                                         static_cast<u32>(frame.bytes.size()),
                                         ref_w, ref_h, header));
-    // A coarse invariant: no frame is rejected and every header lands inside
-    // its frame. This catches gross drift (a misparse that runs the tile count
-    // or header size wild), but not fine drift - a single stray bit keeps the
-    // header small enough to stay in bounds. Exact tail correctness (loop
-    // filter, quant, segmentation, tiles) is what the hardware decode's
-    // pixel-match verifies; the offsets here only have to be believable.
     CHECK(header.uncompressed_header_size + header.compressed_header_size <
           frame.bytes.size());
 
@@ -338,11 +301,6 @@ TEST_CASE("vp9 parse: every frame of the clip parses, header inside the frame") 
   }
 }
 
-// The keyframe pixel-for-pixel match and the sampleable-copy check that used to
-// drive the decoder's low-level decode()/present()/read_luma() directly are now
-// covered through the production surface: "vp9 planes" below matches both luma
-// and chroma bit-for-bit via decode_frame()/show_last(), and "hw source" runs
-// the whole neutral path.
 TEST_CASE("vp9 planes: the resolved luma and chroma match libvpx") {
   TestDevice fixture;
   if (!fixture.ready)
@@ -367,7 +325,6 @@ TEST_CASE("vp9 planes: the resolved luma and chroma match libvpx") {
                                w, h));
   REQUIRE(w == 320u);
   REQUIRE(h == 240u);
-  // Resolve the decoded picture into the two sampled plane textures.
   REQUIRE(decoder.show_last());
 
   const u32 coded = decoder.coded_extent().width;
@@ -380,11 +337,9 @@ TEST_CASE("vp9 planes: the resolved luma and chroma match libvpx") {
   fixture.device.uploader().wait(luma.ticket);
   fixture.device.uploader().wait(chroma.ticket);
 
-  const VpxLuma ref = vpx_decode_luma(frames, 0); // libvpx luma
+  const VpxLuma ref = vpx_decode_luma(frames, 0);
   REQUIRE(ref.ok);
 
-  // Luma: the resolved plane is bit-exact with libvpx over the visible region
-  // (the texture row pitch is the coded width).
   usize luma_mismatch = 0;
   for (u32 y = 0; y < h; ++y)
     for (u32 x = 0; x < w; ++x)
@@ -392,8 +347,6 @@ TEST_CASE("vp9 planes: the resolved luma and chroma match libvpx") {
         ++luma_mismatch;
   CHECK(luma_mismatch == 0u);
 
-  // Chroma: interleaved (Cb in .r, Cr in .g), half resolution, against libvpx's
-  // separate U/V planes.
   vpx_codec_ctx_t codec{};
   REQUIRE(vpx_codec_dec_init(&codec, vpx_codec_vp9_dx(), nullptr, 0) ==
           VPX_CODEC_OK);
@@ -406,7 +359,7 @@ TEST_CASE("vp9 planes: the resolved luma and chroma match libvpx") {
 
   const u32 cw = w / 2;
   const u32 ch = h / 2;
-  const u32 c_pitch = coded / 2; // texels per row in the RG8 texture
+  const u32 c_pitch = coded / 2;
   usize chroma_mismatch = 0;
   for (u32 y = 0; y < ch; ++y)
     for (u32 x = 0; x < cw; ++x) {
@@ -445,16 +398,12 @@ TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
   CHECK(src.height() == 240u);
   CHECK(src.frame_rate() > 0.0);
 
-  // The opening frame comes out as real luma/chroma textures, at the top of the
-  // clip.
   const nxm::video::GpuFrame first = src.frame_at(0.0, false);
   REQUIRE(first.valid());
   CHECK(src.position() < 0.2);
-  CHECK(first.uv_scale.x > 0.9f); // 320 is the coded width here, so no cropping
+  CHECK(first.uv_scale.x > 0.9f);
   CHECK(first.uv_scale.y > 0.9f);
 
-  // Pacing to a second in lands on a later frame - the clock moved and the
-  // decoder chased it forward through the reference chain.
   const nxm::video::GpuFrame later = src.frame_at(1.0, false);
   REQUIRE(later.valid());
   CHECK(src.position() > 0.8);
@@ -479,7 +428,6 @@ TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
     CHECK(mism == 0u);
   }
 
-  // Past the end, a non-looping clip finishes and holds its last frame.
   for (int i = 0; i < 5; ++i)
     (void)src.frame_at(100.0, false);
   CHECK(src.finished());
@@ -488,17 +436,12 @@ TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
   CHECK_FALSE(src.finished());
   CHECK(src.position() >= 3.0);
 
-  // A source recreated after mobile suspend seeks directly to the retained
-  // simulation clock instead of decoding the whole clip from zero.
   nxm::video::HwVideoSource resumed;
   REQUIRE(resumed.open(fixture.device, "/test.webm"));
   REQUIRE(resumed.seek(1.0, false));
   REQUIRE(resumed.frame_at(1.0, false).valid());
   CHECK(resumed.position() > 0.8);
 
-  // A looping hardware source puts restarted packets on the next cycle of the
-  // presentation timeline. Raw WebM PTS restarts at zero; comparing that value
-  // directly with an absolute target would decode the clip forever here.
   nxm::video::HwVideoSource looped;
   REQUIRE(looped.open(fixture.device, "/test.webm"));
   REQUIRE(looped.frame_at(3.1, true).valid());
@@ -519,8 +462,6 @@ TEST_CASE("gpu source: the factory drives the CPU backend behind one interface")
   REQUIRE(nx::vfs::mount("/", nx::vfs::make_host_device(NX_VIDEO_FIXTURE_DIR), 0)
               .valid());
 
-  // AV1 is CPU-only (the hardware path is VP9), so the factory returns the CPU
-  // source - but the module never learns which: it drives the one interface.
   const nxm::video::GpuSourcePtr src =
       nxm::video::create_video_source(fixture.device, "/test_av1.webm");
   REQUIRE(src != nullptr);
@@ -528,9 +469,6 @@ TEST_CASE("gpu source: the factory drives the CPU backend behind one interface")
   CHECK(src->height() == 240u);
   CHECK(src->frame_rate() > 0.0);
 
-  // The CPU decode paces and uploads into the same GpuFrame the hardware path
-  // produces; pixel correctness is the interleave + shader tests, so here the
-  // frame's shape and the pacing are what is pinned.
   const nxm::video::GpuFrame first = src->frame_at(0.0, false);
   REQUIRE(first.valid());
   CHECK(src->position() < 0.2);
@@ -545,15 +483,12 @@ TEST_CASE("gpu source: the factory drives the CPU backend behind one interface")
   CHECK(src->position() > 0.3);
   CHECK(src->position() < 0.7);
 
-  // A recreated looping CPU source keeps the absolute presentation clock but
-  // seeks within the current cycle rather than decoding every earlier loop.
   REQUIRE(src->seek(3.1, true));
   REQUIRE(src->frame_at(3.1, true).valid());
   CHECK(src->position() >= 0.0);
   CHECK(src->position() < 0.2);
   CHECK_FALSE(src->finished());
 
-  // A backward show-time seeks; a non-looping clip run past the end finishes.
   const nxm::video::GpuFrame back = src->frame_at(0.0, false);
   REQUIRE(back.valid());
   CHECK(src->position() < 0.2);
@@ -574,8 +509,6 @@ TEST_CASE("vp9 parse: a truncated or empty frame is rejected, not walked off") {
       rhi::parse_vp9_frame_header(frames[0].bytes.data(), 0, nullptr, nullptr,
                                   header));
 
-  // Two bytes: enough for the marker, far short of the header. The reader runs
-  // out and the parse fails rather than reading past the buffer.
   CHECK_FALSE(rhi::parse_vp9_frame_header(frames[0].bytes.data(), 2, nullptr,
                                           nullptr, header));
 }

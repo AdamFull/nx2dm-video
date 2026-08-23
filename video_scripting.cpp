@@ -17,7 +17,7 @@ namespace sys = nxe::sys;
   return ctx.scene().registry().try_get<VideoPlayer>(e);
 }
 
-} // namespace
+}
 
 void expose_video_services(nxe::script::Host &host, nxe::ModuleContext &ctx) {
   host.expose_as("video_play", [&ctx](const sys::Entity e) {
@@ -71,4 +71,4 @@ void expose_video_services(nxe::script::Host &host, nxe::ModuleContext &ctx) {
   });
 }
 
-} // namespace nxm::video
+}

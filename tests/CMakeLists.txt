@@ -1,8 +1,3 @@
-# Tests for the video module. Two concerns, one binary:
-#  - the shader converts YCbCr and is not upside down (needs a device);
-#  - the decoder reads a real .webm (needs libvpx + libwebm, not the engine).
-# The decode sources are compiled in directly rather than linking the module, so
-# the decode cases pull no RHI and no Engine.
 
 add_executable(nx_video_tests
         test_video_shader.cpp
@@ -34,8 +29,6 @@ target_compile_definitions(nx_video_tests PRIVATE
         NX_TEST_SHADER_DIR="${NX_TEST_SHADERS}"
         NX_VIDEO_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
-# The cases load the module's own shader, which nx_module() compiles into a
-# target of its own.
 if (TARGET nx_module_video_shaders)
     add_dependencies(nx_video_tests nx_module_video_shaders)
 endif ()
@@ -43,8 +36,6 @@ endif ()
 set_target_properties(nx_video_tests PROPERTIES FOLDER "tests")
 nxtest_discover_tests(nx_video_tests LABELS video)
 
-# The script surface needs an Engine and the Host, so it is a target of its own
-# rather than pulling nx::engine into the lean decode/shader suite above.
 add_executable(nx_video_scripting_tests
         test_video_scripting.cpp ../video_scripting.cpp)
 target_include_directories(nx_video_scripting_tests PRIVATE

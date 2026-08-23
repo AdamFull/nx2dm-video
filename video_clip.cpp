@@ -11,7 +11,7 @@ namespace {
 
 constexpr u64 FORMAT_VERSION = 1;
 
-} // namespace
+}
 
 bool load_video_clip(const nx::string_view path, VideoClip &out) {
   auto text = nx::vfs::read_text(nx::vfs::path_view(path));
@@ -36,4 +36,4 @@ bool load_video_clip(const nx::string_view path, VideoClip &out) {
   return true;
 }
 
-} // namespace nxm::video
+}

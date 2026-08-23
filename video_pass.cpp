@@ -8,7 +8,7 @@ namespace nxm::video {
 namespace {
 namespace rhi = nxe::rhi;
 namespace rg = nxe::rg;
-} // namespace
+}
 
 bool VideoRenderer::init(rhi::Device &, const rhi::ShaderHandle shader) {
   if (!shader.valid())
@@ -32,8 +32,6 @@ bool VideoRenderer::ensure_pipeline(rhi::Device &device,
   if (format == m_format && m_pipeline.valid())
     return true;
 
-  // The scene target's format is not known until the first frame and can change
-  // with the swapchain. Rebuilding is rare enough to be simple.
   if (m_pipeline.valid())
     device.destroy_pipeline(m_pipeline);
 
@@ -58,8 +56,6 @@ void VideoRenderer::draw(rhi::Device &device, rg::RenderGraph &graph,
   if (!ensure_pipeline(device, format))
     return;
 
-  // Copied into the pass, not referenced: the caller rebuilds its list next
-  // frame, before this pass has executed.
   nx::vector<VideoDraw> local(draws.begin(), draws.end());
   graph.add_pass(
       "video.draw",
@@ -82,4 +78,4 @@ void VideoRenderer::draw(rhi::Device &device, rg::RenderGraph &graph,
       }));
 }
 
-} // namespace nxm::video
+}

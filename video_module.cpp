@@ -1,8 +1,3 @@
-/**
- * @file video_module.cpp
- * @brief What tells an Engine about video, and the only file here that knows an
- * Engine exists.
- */
 
 #include "video/video_audio.h"
 #include "video/video_clip.h"
@@ -75,12 +70,9 @@ struct Active {
   VideoPlayer *player = nullptr;
 };
 
-/// A clip's simulation-side state: the playback clock and the audio voice. The
-/// video decode lives render-side now (see Source), so this never touches the
-/// device - it advances the clock the render thread paces the picture against,
-/// and reads end-of-stream back through the atomic the render thread writes. The
-/// stream is heap-held so a seek can retire it and swap in a fresh one without
-/// moving the object the mixer still points a playing voice at.
+/// The video decode lives render-side now (see Source), so this never touches the device - it
+/// advances the clock the render thread paces the picture against, and reads end-of-stream back
+/// through the atomic the render thread writes.
 struct Decoder {
   nxe::scene::Entity owner{};
   nx::unique_ptr<nxe::audio::AudioStream> audio;
@@ -91,19 +83,14 @@ struct Decoder {
   bool touched = false;
   bool initialized = false;
   f64 clock = 0.0;
-  // The WebM the player's clip resolves to (a .nxvid names one; a raw .webm is
-  // itself), plus the player values used to detect runtime changes.
   nx::string source;
   nx::string player_clip;
   bool player_looping = true;
   bool loop = true;
-  // Written by the render thread when a non-looping clip ends; read here.
   nx::shared_ptr<std::atomic<bool>> finished =
       nx::make_shared<std::atomic<bool>>(false);
 };
 
-/// A stream a seek replaced, kept alive until its old voice has drained it - the
-/// audio thread may still be reading its ring.
 struct DyingStream {
   nx::unique_ptr<nxe::audio::AudioStream> stream;
   nxe::audio::VoiceHandle voice;
@@ -149,8 +136,6 @@ public:
       nx::logw("video: no renderer; clips will not draw");
     m_sampler = ctx.samplers().index(nxe::scene::sampler_bilinear());
 
-    // Simulation: decode a frame per clip into the packet. No device here - the
-    // uploader is the render thread's alone (see vk_upload.h).
     if (!ctx.schedule().try_define(
             PRESENT_SYSTEM,
             nxe::sys::SystemFn([this, &ctx](const nxe::sys::Context &c) {
@@ -178,7 +163,6 @@ public:
       return false;
     }
 
-    // Renderer: upload this frame's planes and draw. All GPU work lives here.
     ctx.passes().define(
         DRAW_PASS, nxe::PassFn([this, &ctx](nxe::rg::RenderGraph &graph,
                                             nxe::RenderContext &context) {
@@ -197,10 +181,6 @@ public:
   void on_detach(nxe::ModuleContext &ctx) override {
     if (!m_attached)
       return;
-    // Stop the voices, but do not free the streams here: on_detach runs before
-    // the engine stops the audio device (Engine::shutdown), so the audio thread
-    // may still be mid-block. The decoders outlive this call and are freed when
-    // the module is - by which point the device, and its thread, are gone.
     if (ctx.mixer().valid()) {
       for (nx::unique_ptr<Decoder> &d : m_decoders)
         if (d->audio_started)
@@ -216,9 +196,6 @@ public:
           m_decoders[i] = std::move(m_decoders.back());
         m_decoders.pop_back();
       }
-    // The sources own device textures or a video decoder; drop them while the
-    // device is still up (a hardware decoder waits the GPU idle as it tears
-    // down, a CPU source frees its plane textures).
     m_sources.clear();
     m_renderer.shutdown(ctx.device());
     m_sampler = 0;
@@ -259,8 +236,6 @@ private:
     nx::small_vector<Active, 8> active;
     ctx.scene().registry().view<VideoPlayer>().each(
         [&](const nxe::scene::Entity entity, VideoPlayer &player) {
-          // Stopped: leave any decoder untouched so reap releases it (and its
-          // voice), and show nothing.
           if (!player.autoplay) {
             player.finished = false;
             return;
@@ -268,9 +243,6 @@ private:
           active.push_back({entity, &player});
         });
 
-    // Uniform across every clip: the simulation carries the clock and hands the
-    // render thread a show-time. It never decodes and never touches the device -
-    // that is all render-side now, the same for hardware and software.
     for (const Active &a : active) {
       VideoPlayer &player = *a.player;
       Decoder &decoder = decoder_for(a.entity);
@@ -314,7 +286,7 @@ private:
       }
 
       if (player.seek_to >= 0.0) {
-        decoder.clock = player.seek_to; // the render side seeks its decoder to it
+        decoder.clock = player.seek_to;
         if (decoder.audio_started)
           reseat_audio(ctx, decoder, player.seek_to);
         player.seek_to = -1.0;
@@ -345,7 +317,7 @@ private:
       item.owner = a.entity;
       item.world_space = player.world_space;
       if (player.world_space) {
-        item.rect = player.rect; // world-space AABB; the pass projects it
+        item.rect = player.rect;
         item.eye = cam_eye;
         item.half_h = cam_half_h;
       } else {
@@ -364,10 +336,6 @@ private:
     sweep_dying_streams(ctx);
   }
 
-  // The clock the picture is paced against. With sound it is the mixer's DSP
-  // clock, so the video chases the audio and a hitch in one drags the other;
-  // without, it is the frame delta. Pumping the ring is done here too - once per
-  // frame keeps the decoder ahead of the device.
   [[nodiscard]] f64 advance_clock(nxe::ModuleContext &ctx, Decoder &decoder,
                                   const f64 dt) {
     if (!decoder.audio_started || !ctx.mixer().valid())
@@ -426,7 +394,6 @@ private:
         continue;
 
       const GpuFrame frame = clip.source->frame_at(item.pts, item.looping);
-      // Report end-of-stream back to the simulation (it reads it next tick).
       if (item.finished)
         item.finished->store(clip.source->finished(),
                              std::memory_order_relaxed);
@@ -477,9 +444,6 @@ private:
     return *m_sources.back();
   }
 
-  // A source untouched this frame - its clip stopped or its node is gone - is
-  // dropped, and with it the device textures or decoder it owns. Render-thread
-  // only, so the device is up when its resources are freed.
   void reap_sources() {
     for (usize i = m_sources.size(); i-- > 0;)
       if (!m_sources[i]->touched) {
@@ -502,20 +466,17 @@ private:
     auto stream = nx::make_unique<nxe::audio::AudioStream>();
     if (!stream->open(std::move(codec), 1.f, decoder.loop))
       return;
-    stream->pump(); // prime the ring before the voice starts
+    stream->pump();
     const nxe::audio::VoiceHandle voice = ctx.mixer().play(*stream, {});
     if (!voice.valid())
       return;
     decoder.audio = std::move(stream);
     decoder.voice = voice;
     decoder.audio_started = true;
-    decoder.paused = false; // a fresh voice starts running
+    decoder.paused = false;
     decoder.last_dsp = ctx.mixer().dsp_frame();
   }
 
-  // Move a playing clip's sound to @p seek_seconds: retire the current stream to
-  // the graveyard, where its voice may still be draining it, and start a fresh
-  // one seeked there. Each stream owns its ring, so the two never share one.
   void reseat_audio(nxe::ModuleContext &ctx, Decoder &decoder,
                     const f64 seek_seconds) {
     if (ctx.mixer().valid())
@@ -526,9 +487,6 @@ private:
     start_audio(ctx, decoder, seek_seconds);
   }
 
-  // Dead entities with a playing voice cannot be freed yet: the audio thread may
-  // still touch the stream. Stop the voice and set it aside; sweep_dying frees
-  // it once the mixer confirms it has ended.
   void reap_decoders(nxe::ModuleContext &ctx) {
     for (usize i = m_decoders.size(); i-- > 0;) {
       if (m_decoders[i]->touched)
@@ -565,13 +523,8 @@ private:
 
   VideoRenderer m_renderer;
   nx::vector<nx::unique_ptr<Decoder>> m_decoders;
-  // Decoders whose entity is gone but whose voice the audio thread may still be
-  // rendering. Kept until the mixer says the voice has ended, then dropped.
   nx::vector<nx::unique_ptr<Decoder>> m_dying;
-  // Streams a seek replaced, kept until their old voices drain.
   nx::vector<DyingStream> m_dying_streams;
-  // One decode source per clip - hardware or CPU behind GpuVideoSource -
-  // render-side, owning its textures or its device decoder.
   nx::vector<nx::unique_ptr<Source>> m_sources;
   u32 m_sampler = 0;
   bool m_can_draw = false;
@@ -579,7 +532,7 @@ private:
   bool m_attached = false;
 };
 
-} // namespace
-} // namespace nxm::video
+}
+}
 
 NX_DECLARE_MODULE(video, nxm::video::VideoModule)

@@ -1,15 +1,3 @@
-/**
- * @file test_video_scripting.cpp
- * @brief What the module hands a script, and the shape of it.
- *
- * The build writes these signatures into the declarations a type checker reads
- * (script-services.json -> host_api.luau), so a renamed service or a moved
- * argument is a script that quietly stops type-checking, not a build error.
- * This pins the C++ side so the two cannot drift.
- *
- * No backend and no started Engine: Host::expose only records; bind() is what
- * needs a VM.
- */
 
 #include "framework/nxtest.h"
 
@@ -41,14 +29,12 @@ struct Exposed {
   }
 };
 
-} // namespace
+}
 
 TEST_CASE("video scripting: every service is exposed with the shape a script "
           "is told about") {
   const Exposed exposed;
 
-  // Spelled out rather than counted: a count would let a rename through, and the
-  // whole point is that these and the generated declarations cannot drift.
   static constexpr struct {
     nx::string_view name;
     nx::string_view signature;
