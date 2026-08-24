@@ -8,6 +8,7 @@
 #include "mkvparser/mkvparser.h"
 
 #include <cstring>
+#include <limits>
 #include <span>
 
 namespace nxm::video {
@@ -15,10 +16,14 @@ namespace nxm::video {
 class MemoryReader final : public mkvparser::IMkvReader {
 public:
   MemoryReader(const u8 *data, long long size) noexcept
-      : m_data(data), m_size(size) {}
+      : m_data(data), m_size(nx::max(size, 0ll)) {}
 
   int Read(long long pos, long len, unsigned char *buf) override {
     if (pos < 0 || len < 0 || pos > m_size || len > m_size - pos)
+      return -1;
+    if (len == 0)
+      return 0;
+    if (buf == nullptr || m_data == nullptr)
       return -1;
     std::memcpy(buf, m_data + pos, static_cast<size_t>(len));
     return 0;
@@ -36,30 +41,8 @@ private:
   long long m_size;
 };
 
-inline void copy_plane(u8 *dst, const u32 dst_pitch, const u8 *src,
-                       const int src_pitch, const u32 width,
-                       const u32 height) noexcept {
-  for (u32 row = 0; row < height; ++row)
-    std::memcpy(dst + nx::cast<usize>(row) * dst_pitch,
-                src + nx::cast<usize>(row) * nx::cast<u32>(src_pitch), width);
-}
-
-inline void fill_i420(VideoFrame &out, const u32 w, const u32 h, const u32 cw,
-                      const u32 ch, const f64 pts, const u8 *y,
-                      const int y_stride, const u8 *cb, const int cb_stride,
-                      const u8 *cr, const int cr_stride) {
-  out.width = w;
-  out.height = h;
-  out.y_pitch = w;
-  out.c_pitch = cw;
-  out.pts = pts;
-  out.y.resize(nx::cast<usize>(w) * h);
-  out.cb.resize(nx::cast<usize>(cw) * ch);
-  out.cr.resize(nx::cast<usize>(cw) * ch);
-  copy_plane(out.y.data(), w, y, y_stride, w, h);
-  copy_plane(out.cb.data(), cw, cb, cb_stride, cw, ch);
-  copy_plane(out.cr.data(), cw, cr, cr_stride, cw, ch);
-}
+[[nodiscard]] bool read_video_file(nx::string_view path,
+                                   nx::blob<u8> &out) noexcept;
 
 /// Walks the video track of a .webm, yielding each frame's compressed bytes in
 /// presentation order. Demux only: no codec, so every decode path can drive it.
@@ -95,6 +78,7 @@ private:
   const mkvparser::Cluster *m_cluster = nullptr;
   const mkvparser::BlockEntry *m_entry = nullptr;
   bool m_at_entry = false;
+  int m_frame_index = 0;
   nx::vector<u8> m_frame;
   nx::vector<u8> m_codec_private;
   long long m_track_number = 0;
@@ -104,4 +88,4 @@ private:
   ColourInfo m_colour;
 };
 
-}
+} // namespace nxm::video

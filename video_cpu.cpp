@@ -25,14 +25,16 @@ public:
                           const nx::string_view path) override {
     m_device = &device;
     SourcePtr source;
-    if (!path.empty()) {
+    if (path.empty()) {
+      source = std::make_unique<SyntheticSource>(SYNTH_WIDTH, SYNTH_HEIGHT,
+                                                 SYNTH_FPS);
+    } else {
       source = open_media_codec(path);
       if (!source)
         source = open_webm(path);
     }
     if (!source)
-      source =
-          std::make_unique<SyntheticSource>(SYNTH_WIDTH, SYNTH_HEIGHT, SYNTH_FPS);
+      return false;
     m_width = source->width();
     m_height = source->height();
     m_fps = source->frame_rate();
@@ -48,11 +50,12 @@ public:
   [[nodiscard]] f64 frame_rate() const noexcept override { return m_fps; }
   [[nodiscard]] bool seek(const f64 target_seconds,
                           const bool looping) override {
+    if (!std::isfinite(target_seconds))
+      return false;
     const f64 target = nx::max(target_seconds, 0.0);
     const f64 duration = m_playback.duration();
-    const f64 local = looping && duration > 0.0
-                          ? std::fmod(target, duration)
-                          : target;
+    const f64 local =
+        looping && duration > 0.0 ? std::fmod(target, duration) : target;
     if (!m_playback.seek(local, target))
       return false;
     m_finished = false;
@@ -63,6 +66,8 @@ public:
 
   [[nodiscard]] GpuFrame frame_at(const f64 target_seconds,
                                   const bool looping) override {
+    if (!std::isfinite(target_seconds))
+      return m_frame;
     m_playback.set_looping(looping);
     const VideoFrame *const frame = m_playback.advance_to(target_seconds);
     m_finished = m_playback.finished();
@@ -87,8 +92,7 @@ private:
       return false;
     const bool luma = upload_plane(m_luma, frame.y.data(), frame.y.size(),
                                    frame.width, frame.height, frame.width);
-    interleave_chroma(frame, m_chroma_scratch);
-    if (m_chroma_scratch.empty())
+    if (!interleave_chroma(frame, m_chroma_scratch))
       return false;
     const bool chroma = upload_plane(
         m_chroma, m_chroma_scratch.data(), m_chroma_scratch.size(),
@@ -178,7 +182,7 @@ private:
   bool m_finished = false;
 };
 
-}
+} // namespace
 
 GpuSourcePtr create_video_source(nxe::rhi::Device &device,
                                  const nx::string_view path) {
@@ -195,4 +199,4 @@ GpuSourcePtr create_video_source(nxe::rhi::Device &device,
   return nullptr;
 }
 
-}
+} // namespace nxm::video

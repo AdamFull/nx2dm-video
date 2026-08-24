@@ -3,11 +3,11 @@
 #include "core/foundation/diagnostics/log.h"
 
 #include <cmath>
+#include <limits>
 
 namespace nxm::video {
 
 #if defined(NX_RHI_VULKAN)
-
 }
 
 #include "core/rendering/rhi/vulkan/vk_video.h"
@@ -41,10 +41,18 @@ struct HwVideoSource::Impl {
     long len = 0;
     if (!demux.next(data, len, next_pts))
       return false;
+    if (data == nullptr || len <= 0 || !std::isfinite(next_pts) ||
+        next_pts < 0.0 ||
+        timeline_offset > std::numeric_limits<f64>::max() - next_pts)
+      return false;
     last_local_pts = next_pts;
     next_due = timeline_offset + next_pts;
-    next_bytes.assign(data, data + len);
-    return true;
+    try {
+      next_bytes.assign(data, data + len);
+      return true;
+    } catch (...) {
+      return false;
+    }
   }
 
   void pull_next(const bool looping) {
@@ -57,6 +65,11 @@ struct HwVideoSource::Impl {
       const f64 cycle = loop_duration > last_local_pts
                             ? loop_duration
                             : last_local_pts + frame_time;
+      if (!std::isfinite(cycle) || cycle <= 0.0 ||
+          timeline_offset > std::numeric_limits<f64>::max() - cycle) {
+        have_next = false;
+        return;
+      }
       timeline_offset += cycle;
       demux.restart();
       if (demux_next()) {
@@ -103,6 +116,8 @@ f64 HwVideoSource::position() const noexcept { return m->current_pts; }
 bool HwVideoSource::finished() const noexcept { return m->finished; }
 
 bool HwVideoSource::seek(const f64 target_seconds, const bool looping) {
+  if (!std::isfinite(target_seconds))
+    return false;
   const f64 target = nx::max(target_seconds, 0.0);
   const f64 local = looping && m->loop_duration > 0.0
                         ? std::fmod(target, m->loop_duration)
@@ -120,6 +135,8 @@ bool HwVideoSource::seek(const f64 target_seconds, const bool looping) {
 }
 
 GpuFrame HwVideoSource::frame_at(const f64 target_seconds, const bool looping) {
+  if (!std::isfinite(target_seconds))
+    return m->frame;
   if (target_seconds + 1e-6 < m->current_pts) {
     (void)seek(target_seconds, looping);
   }
@@ -131,7 +148,8 @@ GpuFrame HwVideoSource::frame_at(const f64 target_seconds, const bool looping) {
   bool advanced = false;
   u32 shown_w = 0;
   u32 shown_h = 0;
-  while (m->have_next && m->next_due <= target_seconds) {
+  i32 steps = MAX_VIDEO_DECODE_STEPS_PER_ADVANCE;
+  while (steps-- > 0 && m->have_next && m->next_due <= target_seconds) {
     bool shown = false;
     u32 w = 0;
     u32 h = 0;
@@ -181,4 +199,4 @@ GpuFrame HwVideoSource::frame_at(f64, bool) { return {}; }
 
 #endif
 
-}
+} // namespace nxm::video

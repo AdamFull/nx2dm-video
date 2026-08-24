@@ -3,9 +3,22 @@
 #include "core/foundation/containers/blob.h"
 #include "core/foundation/core/foundation.h"
 
+#include <cmath>
+#include <cstddef>
+#include <limits>
 #include <memory>
 
 namespace nxm::video {
+
+inline constexpr usize MAX_ENCODED_VIDEO_BYTES = 256u * 1024u * 1024u;
+inline constexpr usize MAX_VIDEO_PACKET_BYTES = 16u * 1024u * 1024u;
+inline constexpr usize MAX_VIDEO_CODEC_PRIVATE_BYTES = 1u * 1024u * 1024u;
+inline constexpr usize MAX_DECODED_VIDEO_FRAME_BYTES = 64u * 1024u * 1024u;
+inline constexpr usize MAX_VIDEO_CODEC_FRAME_BUFFER_BYTES = 96u * 1024u * 1024u;
+inline constexpr usize MAX_VIDEO_DECODER_BYTES = 256u * 1024u * 1024u;
+inline constexpr u32 MAX_VIDEO_DIMENSION = 8192;
+inline constexpr f64 MAX_VIDEO_FRAME_RATE = 240.0;
+inline constexpr i32 MAX_VIDEO_DECODE_STEPS_PER_ADVANCE = 256;
 
 enum class ColourMatrix : u8 { BT601, BT709, BT2020 };
 
@@ -25,23 +38,25 @@ struct VideoFrame {
   nx::vector<u8> cb;
   nx::vector<u8> cr;
 
-  [[nodiscard]] u32 chroma_width() const noexcept { return (width + 1) / 2; }
-  [[nodiscard]] u32 chroma_height() const noexcept { return (height + 1) / 2; }
+  [[nodiscard]] u32 chroma_width() const noexcept {
+    return width / 2 + width % 2;
+  }
+  [[nodiscard]] u32 chroma_height() const noexcept {
+    return height / 2 + height % 2;
+  }
 };
 
-inline void interleave_chroma(const VideoFrame &frame, nx::vector<u8> &out) {
-  const usize texels =
-      nx::cast<usize>(frame.chroma_width()) * frame.chroma_height();
-  if (frame.cb.size() < texels || frame.cr.size() < texels) {
-    out.clear();
-    return;
-  }
-  out.resize(texels * 2);
-  for (usize i = 0; i < texels; ++i) {
-    out[2 * i] = frame.cb[i];
-    out[2 * i + 1] = frame.cr[i];
-  }
-}
+[[nodiscard]] bool valid_video_dimensions(u64 width, u64 height) noexcept;
+
+[[nodiscard]] bool valid_video_frame(const VideoFrame &frame) noexcept;
+
+[[nodiscard]] bool fill_i420(VideoFrame &out, u32 width, u32 height,
+                             u32 chroma_width, u32 chroma_height, f64 pts,
+                             const u8 *y, ptrdiff_t y_stride, const u8 *cb,
+                             ptrdiff_t cb_stride, const u8 *cr,
+                             ptrdiff_t cr_stride) noexcept;
+
+bool interleave_chroma(const VideoFrame &frame, nx::vector<u8> &out) noexcept;
 
 class FrameSource {
 public:
@@ -77,7 +92,15 @@ public:
   [[nodiscard]] bool next(VideoFrame &out) override;
   void restart() override { m_frame = 0; }
   [[nodiscard]] bool seek(f64 target_seconds) noexcept override {
-    m_frame = target_seconds > 0.0 ? nx::cast<u64>(target_seconds * m_fps) : 0;
+    if (!std::isfinite(target_seconds) || target_seconds <= 0.0) {
+      m_frame = 0;
+    } else {
+      const f64 largest =
+          nx::cast<f64>(std::numeric_limits<u64>::max()) / m_fps;
+      m_frame = target_seconds >= largest
+                    ? std::numeric_limits<u64>::max()
+                    : nx::cast<u64>(target_seconds * m_fps);
+    }
     return true;
   }
 
@@ -127,4 +150,4 @@ private:
   bool m_eos = false;
 };
 
-}
+} // namespace nxm::video

@@ -91,6 +91,51 @@ private:
   u32 m_frame = 0;
 };
 
+class InvalidMetadataSource final : public nxm::video::FrameSource {
+public:
+  [[nodiscard]] u32 width() const noexcept override {
+    return std::numeric_limits<u32>::max();
+  }
+  [[nodiscard]] u32 height() const noexcept override { return 4; }
+  [[nodiscard]] f64 frame_rate() const noexcept override {
+    return std::numeric_limits<f64>::infinity();
+  }
+  [[nodiscard]] bool next(nxm::video::VideoFrame &) override { return false; }
+  void restart() override {}
+};
+
+class OversizedVideoDevice final : public nx::vfs::Device {
+public:
+  [[nodiscard]] nx::fs::io_result<nx::blob<u8>>
+  read(nx::fs::path_view) override {
+    read_called = true;
+    return nx::blob<u8>{};
+  }
+
+  [[nodiscard]] nx::fs::io_result<nx::fs::stream_ptr>
+  open(nx::fs::path_view) override {
+    return nx::err(nx::fs::file_error{nx::fs::io_error::OpenFailed, 0});
+  }
+
+  [[nodiscard]] nx::vfs::FileInfo stat(nx::fs::path_view) override {
+    nx::vfs::FileInfo info;
+    info.size = nxm::video::MAX_ENCODED_VIDEO_BYTES + 1;
+    info.exists = true;
+    return info;
+  }
+
+  [[nodiscard]] nx::fs::io_result<void> list(nx::fs::path_view,
+                                             const nx::vfs::ListFn &) override {
+    return {};
+  }
+
+  [[nodiscard]] const char *name() const noexcept override {
+    return "oversized-video";
+  }
+
+  bool read_called = false;
+};
+
 [[nodiscard]] bool same(const nx::vector<u8> &a, const nx::vector<u8> &b) {
   if (a.size() != b.size())
     return false;
@@ -125,7 +170,7 @@ private:
   return count;
 }
 
-}
+} // namespace
 
 TEST_CASE("video decode: a VP9 webm opens at its true size") {
   const MountedFixtures fixtures;
@@ -239,6 +284,35 @@ TEST_CASE("video frame: chroma interleaves into one NV12 R8G8 plane") {
   CHECK(empty.empty());
 }
 
+TEST_CASE("video frame: dimensions, planes, and signed strides are bounded") {
+  using namespace nxm::video;
+  CHECK(valid_video_dimensions(7680, 4320));
+  CHECK_FALSE(valid_video_dimensions(0, 4320));
+  CHECK_FALSE(valid_video_dimensions(MAX_VIDEO_DIMENSION + 1ull, 1));
+  CHECK_FALSE(valid_video_dimensions(MAX_VIDEO_DIMENSION, MAX_VIDEO_DIMENSION));
+
+  const u8 y[] = {1, 2, 3, 4};
+  const u8 cb[] = {5};
+  const u8 cr[] = {6};
+  VideoFrame frame;
+  REQUIRE(fill_i420(frame, 2, 2, 1, 1, 1.25, y + 2, -2, cb, 1, cr, 1));
+  REQUIRE(valid_video_frame(frame));
+  REQUIRE(frame.y.size() == 4);
+  CHECK(frame.y[0] == 3);
+  CHECK(frame.y[1] == 4);
+  CHECK(frame.y[2] == 1);
+  CHECK(frame.y[3] == 2);
+
+  const nx::vector<u8> previous = frame.y;
+  CHECK_FALSE(fill_i420(frame, 2, 2, 1, 1, 0.0, y, 1, cb, 1, cr, 1));
+  CHECK(same(frame.y, previous));
+  CHECK_FALSE(fill_i420(frame, 2, 2, 1, 1, 0.0, nullptr, 2, cb, 1, cr, 1));
+  CHECK(same(frame.y, previous));
+
+  frame.pts = std::numeric_limits<f64>::quiet_NaN();
+  CHECK_FALSE(valid_video_frame(frame));
+}
+
 TEST_CASE("video decode: every frame of the clip comes out, twice") {
   const MountedFixtures fixtures;
   REQUIRE(fixtures.ok);
@@ -297,6 +371,13 @@ TEST_CASE("video decode: a missing clip is a null source, not a crash") {
   const MountedFixtures fixtures;
   REQUIRE(fixtures.ok);
   CHECK(nxm::video::open_webm("/nope.webm") == nullptr);
+}
+
+TEST_CASE("video pacing: invalid source metadata is rejected at reset") {
+  nxm::video::PacedPlayback pacer;
+  pacer.reset(std::make_unique<InvalidMetadataSource>(), false);
+  CHECK_FALSE(pacer.valid());
+  CHECK(pacer.advance(0.0) == nullptr);
 }
 
 TEST_CASE("video pacing: the frame shown is the one the clock has reached") {
@@ -382,9 +463,35 @@ TEST_CASE("video demux: memory reads reject overflowing ranges") {
   CHECK(reader.Read(3, 2, &out) == -1);
   CHECK(reader.Read(3, 1, &out) == 0);
   CHECK(out == 4u);
+  CHECK(reader.Read(0, 1, nullptr) == -1);
+  CHECK(reader.Read(0, 0, nullptr) == 0);
+
+  nxm::video::MemoryReader missing(nullptr, 4);
+  CHECK(missing.Read(0, 1, &out) == -1);
+  nxm::video::MemoryReader negative(bytes, -1);
+  long long total = -1;
+  REQUIRE(negative.Length(&total, nullptr) == 0);
+  CHECK(total == 0);
 }
 
-TEST_CASE("video budget: a decode cap holds decodes and catches up over calls") {
+TEST_CASE("video demux: oversized VFS entries are refused before reading") {
+  REQUIRE(nx::vfs::initialize());
+  auto *const device = nx::allocate<OversizedVideoDevice>();
+  REQUIRE(device != nullptr);
+  const nx::vfs::MountId mount =
+      nx::vfs::mount("/oversized-video", device, 200);
+  REQUIRE(mount.valid());
+
+  nx::blob<u8> bytes;
+  CHECK_FALSE(nxm::video::read_video_file("/oversized-video/huge.webm", bytes));
+  CHECK(bytes.empty());
+  CHECK_FALSE(device->read_called);
+
+  nx::vfs::unmount(mount);
+}
+
+TEST_CASE(
+    "video budget: a decode cap holds decodes and catches up over calls") {
   auto src = std::make_unique<CountingSource>(60.0);
   CountingSource *const raw = src.get();
   nxm::video::PacedPlayback pacer;
@@ -420,12 +527,26 @@ TEST_CASE("video budget: no cap catches up to the clock in one call") {
   CHECK(raw->decodes > 50);
 }
 
+TEST_CASE("video budget: the implicit safety cap bounds a huge clock jump") {
+  auto src = std::make_unique<CountingSource>(60.0);
+  CountingSource *const raw = src.get();
+  nxm::video::PacedPlayback pacer;
+  pacer.reset(std::move(src), false);
+  REQUIRE(pacer.advance(0.0, nullptr) != nullptr);
+  const int primed = raw->decodes;
+
+  const nxm::video::VideoFrame *const frame = pacer.advance(1000.0, nullptr);
+  REQUIRE(frame != nullptr);
+  CHECK(raw->decodes - primed ==
+        nxm::video::MAX_VIDEO_DECODE_STEPS_PER_ADVANCE);
+  CHECK(frame->pts < 5.0);
+}
+
 TEST_CASE("video audio: the Opus track decodes to 48 kHz PCM, and has sound") {
   const MountedFixtures fixtures;
   REQUIRE(fixtures.ok);
 
-  nxe::audio::DecoderPtr audio =
-      nxm::video::open_webm_opus("/test_audio.webm");
+  nxe::audio::DecoderPtr audio = nxm::video::open_webm_opus("/test_audio.webm");
   REQUIRE(audio != nullptr);
   CHECK(audio->format().sample_rate == 48000u);
   CHECK(audio->format().channels == 1u);
@@ -433,6 +554,8 @@ TEST_CASE("video audio: the Opus track decodes to 48 kHz PCM, and has sound") {
   const u32 ch = audio->format().channels;
   std::vector<i16> buf(nx::cast<usize>(48000u) * ch);
 
+  CHECK(audio->read(nullptr, 1) == 0);
+  CHECK_FALSE(audio->failed());
   const u64 first = audio->read(buf.data(), 48000);
   CHECK(first > 0);
   i16 peak = 0;
@@ -469,6 +592,8 @@ TEST_CASE("video audio: a Vorbis track decodes to PCM, and has sound") {
   const u32 ch = audio->format().channels;
   std::vector<i16> buf(nx::cast<usize>(48000u) * ch);
 
+  CHECK(audio->read(nullptr, 1) == 0);
+  CHECK_FALSE(audio->failed());
   const u64 first = audio->read(buf.data(), 48000);
   CHECK(first > 0);
   i16 peak = 0;

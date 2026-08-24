@@ -36,7 +36,7 @@ bool copy_plane_checked(u8 *const dst, const usize dst_size,
   return true;
 }
 
-}
+} // namespace nxm::video::mediacodec_detail
 
 #if defined(__ANDROID__)
 
@@ -77,7 +77,8 @@ public:
       AMediaCodec_delete(m_codec);
     }
     if (m_reader != nullptr)
-      AImageReader_delete(m_reader); // owns m_window; that must not be freed too
+      AImageReader_delete(
+          m_reader); // owns m_window; that must not be freed too
   }
 
   [[nodiscard]] bool open(const nx::string_view path) {
@@ -91,7 +92,7 @@ public:
     m_width = m_demux.width();
     m_height = m_demux.height();
     const usize max_input = m_demux.max_frame_size();
-    if (max_input == 0 ||
+    if (max_input == 0 || max_input > MAX_VIDEO_PACKET_BYTES ||
         max_input > nx::cast<usize>(std::numeric_limits<i32>::max())) {
       nx::logw("video: unusable maximum compressed frame size ({})", max_input);
       return false;
@@ -100,8 +101,8 @@ public:
     if (__builtin_available(android 26, *)) {
       if (AImageReader_newWithUsage(
               nx::cast<i32>(m_width), nx::cast<i32>(m_height),
-              AIMAGE_FORMAT_YUV_420_888, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, 4,
-              &m_reader) != AMEDIA_OK) {
+              AIMAGE_FORMAT_YUV_420_888, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,
+              4, &m_reader) != AMEDIA_OK) {
         nx::logw("video: AImageReader creation failed");
         return false;
       }
@@ -150,7 +151,8 @@ public:
       return false;
     }
     m_has_pending = true;
-    nx::logi("video: '{}' MediaCodec {} {}x{}", path, m_mime, m_width, m_height);
+    nx::logi("video: '{}' MediaCodec {} {}x{}", path, m_mime, m_width,
+             m_height);
     return true;
   }
 
@@ -164,12 +166,17 @@ public:
   }
 
   [[nodiscard]] bool next(VideoFrame &out) override {
-    if (m_has_pending) {
-      out = std::move(m_pending);
-      m_has_pending = false;
-      return true;
+    try {
+      if (m_has_pending) {
+        out = std::move(m_pending);
+        m_has_pending = false;
+        return true;
+      }
+      return decode_one(out);
+    } catch (...) {
+      m_failed = true;
+      return false;
     }
-    return decode_one(out);
   }
 
   void restart() override {
@@ -387,34 +394,42 @@ private:
       return false;
     }
 
-    const u32 w = m_width;
-    const u32 h = m_height;
-    const u32 cw = (w + 1) / 2;
-    const u32 ch = (h + 1) / 2;
-    out.width = w;
-    out.height = h;
-    out.y_pitch = w;
-    out.c_pitch = cw;
-    out.pts = nx::cast<f64>(pts_us) / 1e6;
-    out.colour = m_demux.colour();
-    out.y.resize(nx::cast<usize>(w) * h);
-    out.cb.resize(nx::cast<usize>(cw) * ch);
-    out.cr.resize(nx::cast<usize>(cw) * ch);
+    try {
+      const u32 w = m_width;
+      const u32 h = m_height;
+      const u32 cw = w / 2 + w % 2;
+      const u32 ch = h / 2 + h % 2;
+      VideoFrame decoded;
+      decoded.width = w;
+      decoded.height = h;
+      decoded.y_pitch = w;
+      decoded.c_pitch = cw;
+      decoded.pts = nx::max(nx::cast<f64>(pts_us) / 1e6, 0.0);
+      decoded.colour = m_demux.colour();
+      decoded.y.resize(nx::cast<usize>(w) * h);
+      decoded.cb.resize(nx::cast<usize>(cw) * ch);
+      decoded.cr.resize(nx::cast<usize>(cw) * ch);
 
-    if (yn < 0 || un < 0 || vn < 0)
+      if (yn < 0 || un < 0 || vn < 0)
+        return false;
+      // Pixel stride 1 is planar (tight), 2 is semi-planar (interleaved UV).
+      // The checked gather handles both and rejects inconsistent vendor
+      // metadata instead of walking beyond an AImage plane.
+      if (!mediacodec_detail::copy_plane_checked(
+              decoded.y.data(), decoded.y.size(), w, yd, nx::cast<usize>(yn),
+              y_row, y_pix, w, h) ||
+          !mediacodec_detail::copy_plane_checked(
+              decoded.cb.data(), decoded.cb.size(), cw, ud, nx::cast<usize>(un),
+              u_row, u_pix, cw, ch) ||
+          !mediacodec_detail::copy_plane_checked(
+              decoded.cr.data(), decoded.cr.size(), cw, vd, nx::cast<usize>(vn),
+              v_row, v_pix, cw, ch))
+        return false;
+      out = std::move(decoded);
+      return true;
+    } catch (...) {
       return false;
-    // Pixel stride 1 is planar (tight), 2 is semi-planar (interleaved UV). The
-    // checked gather handles both and rejects inconsistent vendor metadata
-    // instead of walking beyond an AImage plane.
-    return mediacodec_detail::copy_plane_checked(out.y.data(), out.y.size(), w,
-                                                 yd, nx::cast<usize>(yn), y_row,
-                                                 y_pix, w, h) &&
-           mediacodec_detail::copy_plane_checked(out.cb.data(), out.cb.size(),
-                                                 cw, ud, nx::cast<usize>(un),
-                                                 u_row, u_pix, cw, ch) &&
-           mediacodec_detail::copy_plane_checked(out.cr.data(), out.cr.size(),
-                                                 cw, vd, nx::cast<usize>(vn),
-                                                 v_row, v_pix, cw, ch);
+    }
   }
 
   WebmVideoDemux m_demux;
@@ -435,16 +450,20 @@ private:
   VideoFrame m_pending;
 };
 
-}
+} // namespace
 
 SourcePtr open_media_codec(const nx::string_view path) {
-  auto source = std::make_unique<MediaCodecSource>();
-  if (source->open(path))
-    return source;
-  return nullptr;
+  try {
+    auto source = std::make_unique<MediaCodecSource>();
+    if (source->open(path))
+      return source;
+    return nullptr;
+  } catch (...) {
+    return nullptr;
+  }
 }
 
-}
+} // namespace nxm::video
 
 #else
 
@@ -452,6 +471,6 @@ namespace nxm::video {
 
 SourcePtr open_media_codec(nx::string_view) { return nullptr; }
 
-}
+} // namespace nxm::video
 
 #endif

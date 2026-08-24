@@ -1,47 +1,51 @@
 #include "video/video_audio.h"
+#include "video/video_demux.h"
 
-#include "core/foundation/containers/blob.h"
 #include "core/foundation/diagnostics/log.h"
-#include "core/foundation/vfs/vfs.h"
 
 #include "mkvparser/mkvparser.h"
 
 #include <opus.h>
 #include <vorbis/codec.h>
 
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace nxm::video {
 namespace {
-
-class MemoryReader final : public mkvparser::IMkvReader {
-public:
-  MemoryReader(const u8 *data, long long size) noexcept
-      : m_data(data), m_size(size) {}
-
-  int Read(long long pos, long len, unsigned char *buf) override {
-    if (pos < 0 || len < 0 || pos > m_size || len > m_size - pos)
-      return -1;
-    std::memcpy(buf, m_data + pos, static_cast<size_t>(len));
-    return 0;
-  }
-  int Length(long long *total, long long *available) override {
-    if (total != nullptr)
-      *total = m_size;
-    if (available != nullptr)
-      *available = m_size;
-    return 0;
-  }
-
-private:
-  const u8 *m_data;
-  long long m_size;
-};
 
 constexpr i32 OPUS_RATE = 48000;
 constexpr u32 MAX_CHANNELS = 2;
 // The most a single Opus packet can decode to, per channel: 120 ms at 48 kHz.
 constexpr i32 OPUS_MAX_FRAME = 5760;
+constexpr u64 NANOS_PER_SECOND = 1'000'000'000;
+
+[[nodiscard]] u64 nanoseconds_to_frames(const long long nanoseconds,
+                                        const u32 rate) noexcept {
+  if (nanoseconds <= 0 || rate == 0)
+    return 0;
+  const u64 value = nx::cast<u64>(nanoseconds);
+  return value / NANOS_PER_SECOND * rate +
+         value % NANOS_PER_SECOND * rate / NANOS_PER_SECOND;
+}
+
+[[nodiscard]] bool frames_to_nanoseconds(const u64 frames, const u32 rate,
+                                         long long &out) noexcept {
+  if (rate == 0)
+    return false;
+  const u64 seconds = frames / rate;
+  const u64 remainder = frames % rate;
+  if (seconds >
+      nx::cast<u64>(std::numeric_limits<long long>::max()) / NANOS_PER_SECOND)
+    return false;
+  const u64 nanoseconds =
+      seconds * NANOS_PER_SECOND + remainder * NANOS_PER_SECOND / rate;
+  if (nanoseconds > nx::cast<u64>(std::numeric_limits<long long>::max()))
+    return false;
+  out = nx::cast<long long>(nanoseconds);
+  return true;
+}
 
 class WebmOpusDecoder final : public nxe::audio::IDecoder {
 public:
@@ -52,11 +56,10 @@ public:
   }
 
   [[nodiscard]] bool open(nx::string_view path) {
-    auto bytes = nx::vfs::read(nx::vfs::path_view(path));
-    if (!bytes)
+    if (!read_video_file(path, m_bytes))
       return false;
-    m_bytes = std::move(*bytes);
-    m_reader = MemoryReader(m_bytes.data(), nx::cast<long long>(m_bytes.size()));
+    m_reader =
+        MemoryReader(m_bytes.data(), nx::cast<long long>(m_bytes.size()));
 
     long long pos = 0;
     if (mkvparser::EBMLHeader{}.Parse(&m_reader, pos) < 0)
@@ -87,21 +90,27 @@ public:
       return false;
     }
     m_track_number = audio->GetNumber();
+    if (m_track_number <= 0)
+      return false;
     m_format.channels = nx::cast<u32>(channels);
     m_format.sample_rate = nx::cast<u32>(OPUS_RATE);
-    const long long duration = m_segment->GetDuration();
     m_format.frames =
-        duration > 0
-            ? nx::cast<u64>(nx::cast<f64>(duration) * OPUS_RATE / 1e9)
-            : 0;
+        nanoseconds_to_frames(m_segment->GetDuration(), OPUS_RATE);
+    if (!nxe::audio::is_mixable(m_format))
+      return false;
 
-    // OpusHead's pre-skip (bytes 10-11, little-endian): priming samples the encoder added that must
-    // be dropped from the front, or the whole track plays that many samples early. opusfile does
-    // this for the file path; here it is ours to do.
+    // OpusHead's pre-skip (bytes 10-11, little-endian): priming samples the
+    // encoder added that must be dropped from the front, or the whole track
+    // plays that many samples early. opusfile does this for the file path; here
+    // it is ours to do.
     size_t private_size = 0;
     const unsigned char *const priv = audio->GetCodecPrivate(private_size);
-    if (priv != nullptr && private_size >= 12)
-      m_pre_skip = nx::cast<u32>(priv[10]) | (nx::cast<u32>(priv[11]) << 8);
+    if (priv == nullptr || private_size < 19 ||
+        private_size > MAX_VIDEO_CODEC_PRIVATE_BYTES ||
+        std::memcmp(priv, "OpusHead", 8) != 0 ||
+        priv[9] != nx::cast<u8>(channels) || priv[18] != 0)
+      return false;
+    m_pre_skip = nx::cast<u32>(priv[10]) | (nx::cast<u32>(priv[11]) << 8);
     m_pre_skip_remaining = m_pre_skip;
 
     int error = 0;
@@ -113,60 +122,84 @@ public:
     }
     m_pcm.resize(nx::cast<usize>(OPUS_MAX_FRAME) * MAX_CHANNELS);
     m_cluster = m_segment->GetFirst();
-    return true;
+    return m_cluster != nullptr;
   }
 
-  [[nodiscard]] const nxe::audio::SoundFormat &format() const noexcept override {
+  [[nodiscard]] const nxe::audio::SoundFormat &
+  format() const noexcept override {
     return m_format;
   }
 
   u64 read(i16 *out, const u64 frames) noexcept override {
-    if (m_opus == nullptr || frames == 0)
+    if (m_opus == nullptr || out == nullptr || frames == 0 || m_failed ||
+        frames > std::numeric_limits<usize>::max() / m_format.channels)
       return 0;
-    const u32 ch = m_format.channels;
-    u64 produced = 0;
-    while (produced < frames) {
-      if (m_leftover_pos < m_leftover.size()) {
-        const u64 have = (m_leftover.size() - m_leftover_pos) / ch;
-        const u64 take = nx::min<u64>(have, frames - produced);
-        std::memcpy(out + produced * ch, m_leftover.data() + m_leftover_pos,
-                    nx::cast<usize>(take * ch) * sizeof(i16));
-        m_leftover_pos += take * ch;
-        produced += take;
-        continue;
+    try {
+      const u32 ch = m_format.channels;
+      u64 produced = 0;
+      while (produced < frames) {
+        if (m_leftover_pos < m_leftover.size()) {
+          const u64 have = (m_leftover.size() - m_leftover_pos) / ch;
+          const u64 take = nx::min<u64>(have, frames - produced);
+          std::memcpy(out + nx::cast<usize>(produced * ch),
+                      m_leftover.data() + m_leftover_pos,
+                      nx::cast<usize>(take * ch) * sizeof(i16));
+          m_leftover_pos += nx::cast<usize>(take * ch);
+          produced += take;
+          continue;
+        }
+        if (!decode_next())
+          break;
       }
-      if (!decode_next())
-        break;
+      return produced;
+    } catch (...) {
+      m_failed = true;
+      m_resource_exhausted = true;
+      return 0;
     }
-    return produced;
   }
 
   [[nodiscard]] bool seek(const u64 frame) noexcept override {
-    if (m_opus == nullptr)
-      return false;
-    opus_decoder_ctl(m_opus, OPUS_RESET_STATE);
-    m_leftover.clear();
-    m_leftover_pos = 0;
-    m_frame_index = 0;
+    try {
+      if (m_opus == nullptr ||
+          (m_format.frames != 0 && frame > m_format.frames) ||
+          !frames_to_nanoseconds(frame, OPUS_RATE, m_seek_target_ns))
+        return false;
+      opus_decoder_ctl(m_opus, OPUS_RESET_STATE);
+      m_leftover.clear();
+      m_leftover_pos = 0;
+      m_frame_index = 0;
+      m_failed = false;
+      m_resource_exhausted = false;
 
-    long long block_ns = 0;
-    if (frame != 0) {
-      const long long target = nx::cast<long long>(nx::cast<f64>(frame) /
-                                                   OPUS_RATE * 1e9);
-      if (locate(target, block_ns)) {
-        const long long block_frame =
-            nx::cast<long long>(nx::cast<f64>(block_ns) * OPUS_RATE / 1e9);
-        m_pre_skip_remaining =
-            nx::cast<u32>(nx::max<long long>(nx::cast<long long>(frame) -
-                                             block_frame, 0));
-        return true;
+      long long block_ns = 0;
+      if (frame != 0) {
+        if (locate(m_seek_target_ns, block_ns)) {
+          const u64 block_frame = nanoseconds_to_frames(block_ns, OPUS_RATE);
+          m_pre_skip_remaining = frame > block_frame ? frame - block_frame : 0;
+          return true;
+        }
+        if (m_failed)
+          return false;
       }
+      m_pre_skip_remaining = m_pre_skip;
+      m_block = nullptr;
+      m_entry = nullptr;
+      m_cluster = m_segment != nullptr ? m_segment->GetFirst() : nullptr;
+      return true;
+    } catch (...) {
+      m_failed = true;
+      m_resource_exhausted = true;
+      return false;
     }
-    m_pre_skip_remaining = m_pre_skip;
-    m_block = nullptr;
-    m_entry = nullptr;
-    m_cluster = m_segment != nullptr ? m_segment->GetFirst() : nullptr;
-    return true;
+  }
+
+  [[nodiscard]] bool failed() const noexcept override { return m_failed; }
+
+  [[nodiscard]] nxe::audio::DecodeError
+  failure_reason() const noexcept override {
+    return m_resource_exhausted ? nxe::audio::DecodeError::ResourceExhausted
+                                : nxe::audio::DecodeError::Malformed;
   }
 
 private:
@@ -198,6 +231,10 @@ private:
         status = cluster->GetNext(entry, next);
         entry = next;
       }
+      if (status < 0) {
+        m_failed = true;
+        return false;
+      }
     }
     if (fb == nullptr)
       return false;
@@ -209,9 +246,6 @@ private:
     return true;
   }
 
-  // Decodes the next Opus packet into m_leftover. False only at end of stream;
-  // a packet that fails to decode is skipped with m_leftover left empty, so the
-  // caller's loop pulls the next one.
   bool decode_next() {
     const u8 *data = nullptr;
     long len = 0;
@@ -220,14 +254,19 @@ private:
 
     const int got = opus_decode(m_opus, data, nx::cast<opus_int32>(len),
                                 m_pcm.data(), OPUS_MAX_FRAME, 0);
-    if (got <= 0)
+    if (got < 0) {
+      m_failed = true;
+      return false;
+    }
+    if (got == 0)
       return true;
 
     const u32 ch = m_format.channels;
     u32 samples = nx::cast<u32>(got); // per channel
     u32 start = 0;
     if (m_pre_skip_remaining > 0) {
-      const u32 drop = nx::min(m_pre_skip_remaining, samples);
+      const u32 drop =
+          nx::cast<u32>(nx::min<u64>(m_pre_skip_remaining, samples));
       start = drop;
       m_pre_skip_remaining -= drop;
     }
@@ -243,12 +282,19 @@ private:
   bool next_packet(const u8 *&data, long &len) {
     for (;;) {
       if (m_block != nullptr && m_frame_index < m_block->GetFrameCount()) {
-        const mkvparser::Block::Frame &frame = m_block->GetFrame(m_frame_index++);
+        const mkvparser::Block::Frame &frame =
+            m_block->GetFrame(m_frame_index++);
         if (frame.len <= 0)
           continue;
+        if (nx::cast<usize>(frame.len) > MAX_VIDEO_PACKET_BYTES) {
+          m_failed = true;
+          return false;
+        }
         m_packet.resize(nx::cast<usize>(frame.len));
-        if (frame.Read(&m_reader, m_packet.data()) < 0)
-          continue;
+        if (frame.Read(&m_reader, m_packet.data()) < 0) {
+          m_failed = true;
+          return false;
+        }
         data = m_packet.data();
         len = frame.len;
         return true;
@@ -269,6 +315,10 @@ private:
         m_entry = next;
       }
       if (status < 0 || m_entry == nullptr || m_entry->EOS()) {
+        if (status < 0) {
+          m_failed = true;
+          return false;
+        }
         m_cluster = m_segment->GetNext(m_cluster);
         m_entry = nullptr;
         continue;
@@ -295,12 +345,15 @@ private:
   nxe::audio::SoundFormat m_format;
   long long m_track_number = 0;
   u32 m_pre_skip = 0;
-  u32 m_pre_skip_remaining = 0;
+  u64 m_pre_skip_remaining = 0;
+  long long m_seek_target_ns = 0;
 
   nx::vector<u8> m_packet;
   nx::vector<i16> m_pcm;
   nx::vector<i16> m_leftover;
   usize m_leftover_pos = 0;
+  bool m_failed = false;
+  bool m_resource_exhausted = false;
 };
 
 class WebmVorbisDecoder final : public nxe::audio::IDecoder {
@@ -318,11 +371,10 @@ public:
   }
 
   [[nodiscard]] bool open(nx::string_view path) {
-    auto bytes = nx::vfs::read(nx::vfs::path_view(path));
-    if (!bytes)
+    if (!read_video_file(path, m_bytes))
       return false;
-    m_bytes = std::move(*bytes);
-    m_reader = MemoryReader(m_bytes.data(), nx::cast<long long>(m_bytes.size()));
+    m_reader =
+        MemoryReader(m_bytes.data(), nx::cast<long long>(m_bytes.size()));
 
     long long pos = 0;
     if (mkvparser::EBMLHeader{}.Parse(&m_reader, pos) < 0)
@@ -348,81 +400,115 @@ public:
 
     const long long channels = audio->GetChannels();
     if (channels < 1 || nx::cast<u32>(channels) > MAX_CHANNELS) {
-      nx::logw("video: Vorbis track has {} channels; the mixer takes at most {}",
-               channels, MAX_CHANNELS);
+      nx::logw(
+          "video: Vorbis track has {} channels; the mixer takes at most {}",
+          channels, MAX_CHANNELS);
       return false;
     }
     m_track_number = audio->GetNumber();
+    if (m_track_number <= 0)
+      return false;
 
-    if (!read_headers(*audio))
+    if (!read_headers(*audio) || m_vi.channels != channels ||
+        m_vi.channels < 1 || nx::cast<u32>(m_vi.channels) > MAX_CHANNELS ||
+        m_vi.rate <= 0 ||
+        nx::cast<u64>(m_vi.rate) > std::numeric_limits<u32>::max())
+      return false;
+
+    m_format.channels = nx::cast<u32>(m_vi.channels);
+    m_format.sample_rate = nx::cast<u32>(m_vi.rate);
+    m_format.frames =
+        nanoseconds_to_frames(m_segment->GetDuration(), m_format.sample_rate);
+    if (!nxe::audio::is_mixable(m_format))
       return false;
 
     if (vorbis_synthesis_init(&m_vd, &m_vi) != 0)
       return false;
-    vorbis_block_init(&m_vd, &m_vb);
+    if (vorbis_block_init(&m_vd, &m_vb) != 0) {
+      vorbis_dsp_clear(&m_vd);
+      return false;
+    }
     m_synth_ready = true;
 
-    m_format.channels = nx::cast<u32>(m_vi.channels);
-    m_format.sample_rate = nx::cast<u32>(m_vi.rate);
-    const long long duration = m_segment->GetDuration();
-    m_format.frames =
-        duration > 0 ? nx::cast<u64>(nx::cast<f64>(duration) *
-                                     m_format.sample_rate / 1e9)
-                     : 0;
-
     m_cluster = m_segment->GetFirst();
-    return true;
+    return m_cluster != nullptr;
   }
 
-  [[nodiscard]] const nxe::audio::SoundFormat &format() const noexcept override {
+  [[nodiscard]] const nxe::audio::SoundFormat &
+  format() const noexcept override {
     return m_format;
   }
 
   u64 read(i16 *out, const u64 frames) noexcept override {
-    if (!m_synth_ready || frames == 0)
+    if (!m_synth_ready || out == nullptr || frames == 0 || m_failed ||
+        frames > std::numeric_limits<usize>::max() / m_format.channels)
       return 0;
-    const u32 ch = m_format.channels;
-    u64 produced = 0;
-    while (produced < frames) {
-      if (m_leftover_pos < m_leftover.size()) {
-        const u64 have = (m_leftover.size() - m_leftover_pos) / ch;
-        const u64 take = nx::min<u64>(have, frames - produced);
-        std::memcpy(out + produced * ch, m_leftover.data() + m_leftover_pos,
-                    nx::cast<usize>(take * ch) * sizeof(i16));
-        m_leftover_pos += take * ch;
-        produced += take;
-        continue;
+    try {
+      const u32 ch = m_format.channels;
+      u64 produced = 0;
+      while (produced < frames) {
+        if (m_leftover_pos < m_leftover.size()) {
+          const u64 have = (m_leftover.size() - m_leftover_pos) / ch;
+          const u64 take = nx::min<u64>(have, frames - produced);
+          std::memcpy(out + nx::cast<usize>(produced * ch),
+                      m_leftover.data() + m_leftover_pos,
+                      nx::cast<usize>(take * ch) * sizeof(i16));
+          m_leftover_pos += nx::cast<usize>(take * ch);
+          produced += take;
+          continue;
+        }
+        if (!decode_next())
+          break;
       }
-      if (!decode_next())
-        break;
+      return produced;
+    } catch (...) {
+      m_failed = true;
+      m_resource_exhausted = true;
+      return 0;
     }
-    return produced;
   }
 
   [[nodiscard]] bool seek(const u64 frame) noexcept override {
-    if (m_synth_ready)
+    try {
+      if (!m_synth_ready || (m_format.frames != 0 && frame > m_format.frames) ||
+          !frames_to_nanoseconds(frame, m_format.sample_rate, m_seek_target_ns))
+        return false;
       vorbis_synthesis_restart(&m_vd);
-    m_leftover.clear();
-    m_leftover_pos = 0;
-    m_frame_index = 0;
+      m_leftover.clear();
+      m_leftover_pos = 0;
+      m_frame_index = 0;
+      m_failed = false;
+      m_resource_exhausted = false;
 
-    long long block_ns = 0;
-    if (frame != 0 && m_format.sample_rate != 0) {
-      const long long target = nx::cast<long long>(
-          nx::cast<f64>(frame) / m_format.sample_rate * 1e9);
-      if (locate(target, block_ns)) {
-        const long long block_frame = nx::cast<long long>(
-            nx::cast<f64>(block_ns) * m_format.sample_rate / 1e9);
-        m_drop = nx::cast<u64>(
-            nx::max<long long>(nx::cast<long long>(frame) - block_frame, 0));
-        return true;
+      long long block_ns = 0;
+      if (frame != 0) {
+        if (locate(m_seek_target_ns, block_ns)) {
+          const u64 block_frame =
+              nanoseconds_to_frames(block_ns, m_format.sample_rate);
+          m_drop = frame > block_frame ? frame - block_frame : 0;
+          return true;
+        }
+        if (m_failed)
+          return false;
       }
+      m_drop = 0;
+      m_block = nullptr;
+      m_entry = nullptr;
+      m_cluster = m_segment != nullptr ? m_segment->GetFirst() : nullptr;
+      return true;
+    } catch (...) {
+      m_failed = true;
+      m_resource_exhausted = true;
+      return false;
     }
-    m_drop = 0;
-    m_block = nullptr;
-    m_entry = nullptr;
-    m_cluster = m_segment != nullptr ? m_segment->GetFirst() : nullptr;
-    return true;
+  }
+
+  [[nodiscard]] bool failed() const noexcept override { return m_failed; }
+
+  [[nodiscard]] nxe::audio::DecodeError
+  failure_reason() const noexcept override {
+    return m_resource_exhausted ? nxe::audio::DecodeError::ResourceExhausted
+                                : nxe::audio::DecodeError::Malformed;
   }
 
 private:
@@ -454,6 +540,10 @@ private:
         status = cluster->GetNext(entry, next);
         entry = next;
       }
+      if (status < 0) {
+        m_failed = true;
+        return false;
+      }
     }
     if (fb == nullptr)
       return false;
@@ -468,7 +558,8 @@ private:
   bool read_headers(const mkvparser::AudioTrack &audio) {
     size_t size = 0;
     const unsigned char *const priv = audio.GetCodecPrivate(size);
-    if (priv == nullptr || size < 3 || priv[0] != 2) {
+    if (priv == nullptr || size < 3 || size > MAX_VIDEO_CODEC_PRIVATE_BYTES ||
+        priv[0] != 2) {
       nx::logw("video: Vorbis track carries no setup headers");
       return false;
     }
@@ -519,29 +610,57 @@ private:
     op.bytes = len;
     op.granulepos = -1;
     op.packetno = m_packetno++;
-    if (vorbis_synthesis(&m_vb, &op) != 0)
-      return true;
-    vorbis_synthesis_blockin(&m_vd, &m_vb);
+    if (vorbis_synthesis(&m_vb, &op) != 0 ||
+        vorbis_synthesis_blockin(&m_vd, &m_vb) != 0) {
+      m_failed = true;
+      return false;
+    }
 
     const u32 ch = m_format.channels;
     m_leftover.clear();
     m_leftover_pos = 0;
     float **pcm = nullptr;
-    for (int got; (got = vorbis_synthesis_pcmout(&m_vd, &pcm)) > 0;) {
+    for (;;) {
+      const int got = vorbis_synthesis_pcmout(&m_vd, &pcm);
+      if (got < 0) {
+        m_failed = true;
+        return false;
+      }
+      if (got == 0)
+        break;
+      if (got > 8192 || pcm == nullptr) {
+        m_failed = true;
+        return false;
+      }
+      for (u32 c = 0; c < ch; ++c)
+        if (pcm[c] == nullptr) {
+          m_failed = true;
+          return false;
+        }
       int start = 0;
       if (m_drop > 0) {
         start = nx::cast<int>(nx::min<u64>(m_drop, nx::cast<u64>(got)));
         m_drop -= nx::cast<u64>(start);
       }
       const usize base = m_leftover.size();
-      m_leftover.resize(base + nx::cast<usize>(got - start) * ch);
+      const usize appended = nx::cast<usize>(got - start) * ch;
+      const usize max_samples = nx::cast<usize>(8192) * ch;
+      if (base > max_samples || appended > max_samples - base) {
+        m_failed = true;
+        return false;
+      }
+      m_leftover.resize(base + appended);
       for (int i = start; i < got; ++i)
         for (u32 c = 0; c < ch; ++c) {
-          const float s = nx::clamp(pcm[c][i], -1.f, 1.f);
+          const float raw = pcm[c][i];
+          const float s = std::isfinite(raw) ? nx::clamp(raw, -1.f, 1.f) : 0.f;
           m_leftover[base + nx::cast<usize>(i - start) * ch + c] =
               nx::cast<i16>(s * 32767.f);
         }
-      vorbis_synthesis_read(&m_vd, got);
+      if (vorbis_synthesis_read(&m_vd, got) != 0) {
+        m_failed = true;
+        return false;
+      }
     }
     return true;
   }
@@ -549,12 +668,19 @@ private:
   bool next_packet(const u8 *&data, long &len) {
     for (;;) {
       if (m_block != nullptr && m_frame_index < m_block->GetFrameCount()) {
-        const mkvparser::Block::Frame &frame = m_block->GetFrame(m_frame_index++);
+        const mkvparser::Block::Frame &frame =
+            m_block->GetFrame(m_frame_index++);
         if (frame.len <= 0)
           continue;
+        if (nx::cast<usize>(frame.len) > MAX_VIDEO_PACKET_BYTES) {
+          m_failed = true;
+          return false;
+        }
         m_packet.resize(nx::cast<usize>(frame.len));
-        if (frame.Read(&m_reader, m_packet.data()) < 0)
-          continue;
+        if (frame.Read(&m_reader, m_packet.data()) < 0) {
+          m_failed = true;
+          return false;
+        }
         data = m_packet.data();
         len = frame.len;
         return true;
@@ -575,6 +701,10 @@ private:
         m_entry = next;
       }
       if (status < 0 || m_entry == nullptr || m_entry->EOS()) {
+        if (status < 0) {
+          m_failed = true;
+          return false;
+        }
         m_cluster = m_segment->GetNext(m_cluster);
         m_entry = nullptr;
         continue;
@@ -608,25 +738,36 @@ private:
   nxe::audio::SoundFormat m_format;
   long long m_track_number = 0;
   u64 m_drop = 0;
+  long long m_seek_target_ns = 0;
   nx::vector<u8> m_packet;
   nx::vector<i16> m_leftover;
   usize m_leftover_pos = 0;
+  bool m_failed = false;
+  bool m_resource_exhausted = false;
 };
 
-}
+} // namespace
 
 nxe::audio::DecoderPtr open_webm_opus(const nx::string_view path) {
-  auto decoder = std::make_unique<WebmOpusDecoder>();
-  if (!decoder->open(path))
+  try {
+    auto decoder = std::make_unique<WebmOpusDecoder>();
+    if (!decoder->open(path))
+      return nullptr;
+    return decoder;
+  } catch (...) {
     return nullptr;
-  return decoder;
+  }
 }
 
 nxe::audio::DecoderPtr open_webm_vorbis(const nx::string_view path) {
-  auto decoder = std::make_unique<WebmVorbisDecoder>();
-  if (!decoder->open(path))
+  try {
+    auto decoder = std::make_unique<WebmVorbisDecoder>();
+    if (!decoder->open(path))
+      return nullptr;
+    return decoder;
+  } catch (...) {
     return nullptr;
-  return decoder;
+  }
 }
 
 nxe::audio::DecoderPtr open_webm_audio(const nx::string_view path) {
@@ -635,4 +776,4 @@ nxe::audio::DecoderPtr open_webm_audio(const nx::string_view path) {
   return open_webm_vorbis(path);
 }
 
-}
+} // namespace nxm::video
