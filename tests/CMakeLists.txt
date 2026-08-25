@@ -17,7 +17,7 @@ add_executable(nx_video_tests
         ../video_mediacodec.cpp)
 
 target_include_directories(nx_video_tests PRIVATE
-        "${CMAKE_SOURCE_DIR}/engine" "${CMAKE_SOURCE_DIR}/modules")
+        "${NX_ENGINE_ROOT}/engine" "${NX_ENGINE_ROOT}/modules")
 
 target_link_libraries(nx_video_tests
         PRIVATE nx::test nx::foundation nx::rhi nx::glm nx::vpx nx::webm nx::opus
@@ -50,7 +50,7 @@ add_executable(nx_video_shipping_asset_tests
         ../video_asset.cpp
         ../video_webm.cpp)
 target_include_directories(nx_video_shipping_asset_tests PRIVATE
-        "${CMAKE_SOURCE_DIR}/engine" "${CMAKE_SOURCE_DIR}/modules")
+        "${NX_ENGINE_ROOT}/engine" "${NX_ENGINE_ROOT}/modules")
 target_link_libraries(nx_video_shipping_asset_tests
         PRIVATE nx::test nx::foundation nx::webm nx::compile_options)
 target_compile_definitions(nx_video_shipping_asset_tests PRIVATE
@@ -63,7 +63,7 @@ nxtest_discover_tests(nx_video_shipping_asset_tests
 add_executable(nx_video_scripting_tests
         test_video_scripting.cpp ../video_scripting.cpp)
 target_include_directories(nx_video_scripting_tests PRIVATE
-        "${CMAKE_SOURCE_DIR}/engine" "${CMAKE_SOURCE_DIR}/modules")
+        "${NX_ENGINE_ROOT}/engine" "${NX_ENGINE_ROOT}/modules")
 target_link_libraries(nx_video_scripting_tests
         PRIVATE nx::test nx::foundation nx::engine nx::glm nx::compile_options)
 set_target_properties(nx_video_scripting_tests PROPERTIES FOLDER "tests")
