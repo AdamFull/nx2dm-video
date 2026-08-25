@@ -1,5 +1,7 @@
 #pragma once
 
+#include "video/video_asset.h"
+
 #include "core/foundation/containers/blob.h"
 #include "core/foundation/core/foundation.h"
 
@@ -10,14 +12,6 @@
 
 namespace nxm::video {
 
-inline constexpr usize MAX_ENCODED_VIDEO_BYTES = 256u * 1024u * 1024u;
-inline constexpr usize MAX_VIDEO_PACKET_BYTES = 16u * 1024u * 1024u;
-inline constexpr usize MAX_VIDEO_CODEC_PRIVATE_BYTES = 1u * 1024u * 1024u;
-inline constexpr usize MAX_DECODED_VIDEO_FRAME_BYTES = 64u * 1024u * 1024u;
-inline constexpr usize MAX_VIDEO_CODEC_FRAME_BUFFER_BYTES = 96u * 1024u * 1024u;
-inline constexpr usize MAX_VIDEO_DECODER_BYTES = 256u * 1024u * 1024u;
-inline constexpr u32 MAX_VIDEO_DIMENSION = 8192;
-inline constexpr f64 MAX_VIDEO_FRAME_RATE = 240.0;
 inline constexpr i32 MAX_VIDEO_DECODE_STEPS_PER_ADVANCE = 256;
 
 enum class ColourMatrix : u8 { BT601, BT709, BT2020 };

@@ -1,48 +1,19 @@
 #pragma once
 
+#include "video/video_asset.h"
 #include "video/video_source.h"
+#include "video/video_webm.h"
 
-#include "core/foundation/containers/blob.h"
 #include "core/foundation/strings/utf8_string_view.h"
 
 #include "mkvparser/mkvparser.h"
 
-#include <cstring>
-#include <limits>
 #include <span>
 
 namespace nxm::video {
 
-class MemoryReader final : public mkvparser::IMkvReader {
-public:
-  MemoryReader(const u8 *data, long long size) noexcept
-      : m_data(data), m_size(nx::max(size, 0ll)) {}
-
-  int Read(long long pos, long len, unsigned char *buf) override {
-    if (pos < 0 || len < 0 || pos > m_size || len > m_size - pos)
-      return -1;
-    if (len == 0)
-      return 0;
-    if (buf == nullptr || m_data == nullptr)
-      return -1;
-    std::memcpy(buf, m_data + pos, static_cast<size_t>(len));
-    return 0;
-  }
-  int Length(long long *total, long long *available) override {
-    if (total != nullptr)
-      *total = m_size;
-    if (available != nullptr)
-      *available = m_size;
-    return 0;
-  }
-
-private:
-  const u8 *m_data;
-  long long m_size;
-};
-
 [[nodiscard]] bool read_video_file(nx::string_view path,
-                                   nx::blob<u8> &out) noexcept;
+                                   EncodedVideo &out) noexcept;
 
 /// Walks the video track of a .webm, yielding each frame's compressed bytes in
 /// presentation order. Demux only: no codec, so every decode path can drive it.
@@ -72,7 +43,7 @@ public:
   [[nodiscard]] bool next(const u8 *&data, long &len, f64 &pts);
 
 private:
-  nx::blob<u8> m_bytes;
+  EncodedVideo m_bytes;
   MemoryReader m_reader{nullptr, 0};
   mkvparser::Segment *m_segment = nullptr;
   const mkvparser::Cluster *m_cluster = nullptr;

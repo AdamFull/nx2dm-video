@@ -20,8 +20,48 @@ set(NX_LIBGAV1_TAG "c1deec657b32b911920c78e078cfd089faa77200"
 set(NX_LIBGAV1_SOURCE_DIR "" CACHE PATH
         "An existing libgav1 checkout. Empty fetches NX_LIBGAV1_TAG.")
 
-function(nx_add_video_codecs)
+function(nx_add_video_container)
+    if (TARGET nx_webm)
+        return()
+    endif ()
+
     include(FetchContent)
+
+    set(_webm_submodule "${CMAKE_CURRENT_LIST_DIR}/third_party/libwebm")
+    if (NX_LIBWEBM_SOURCE_DIR)
+        set(_webm_dir "${NX_LIBWEBM_SOURCE_DIR}")
+    elseif (EXISTS "${_webm_submodule}/mkvparser/mkvparser.h")
+        set(_webm_dir "${_webm_submodule}")
+        message(STATUS "nx2d: libwebm from submodule")
+    else ()
+        FetchContent_Declare(libwebm
+                GIT_REPOSITORY "${NX_LIBWEBM_REPOSITORY}"
+                GIT_TAG "${NX_LIBWEBM_TAG}"
+                GIT_PROGRESS TRUE
+                SOURCE_SUBDIR "cmake-is-not-here")
+        message(STATUS "nx2d: fetching libwebm ${NX_LIBWEBM_TAG}")
+        FetchContent_MakeAvailable(libwebm)
+        set(_webm_dir "${libwebm_SOURCE_DIR}")
+    endif ()
+    if (NOT EXISTS "${_webm_dir}/mkvparser/mkvparser.h")
+        message(FATAL_ERROR "nx2d: no libwebm at ${_webm_dir}")
+    endif ()
+
+    add_library(nx_webm STATIC
+            "${_webm_dir}/mkvparser/mkvparser.cc"
+            "${_webm_dir}/mkvparser/mkvreader.cc")
+    add_library(nx::webm ALIAS nx_webm)
+    target_include_directories(nx_webm SYSTEM PUBLIC "${_webm_dir}")
+    set_target_properties(nx_webm PROPERTIES FOLDER "third_party")
+endfunction()
+
+function(nx_add_video_codecs)
+    if (TARGET nx_vpx)
+        return()
+    endif ()
+
+    include(FetchContent)
+    nx_add_video_container()
 
     set(_config "${CMAKE_CURRENT_LIST_DIR}/third_party/libvpx_config")
 
@@ -58,33 +98,6 @@ function(nx_add_video_codecs)
     target_include_directories(nx_vpx SYSTEM PUBLIC
             "${_config}/generic" "${_vpx_dir}")
     set_target_properties(nx_vpx PROPERTIES FOLDER "third_party")
-
-    set(_webm_submodule "${CMAKE_CURRENT_LIST_DIR}/third_party/libwebm")
-    if (NX_LIBWEBM_SOURCE_DIR)
-        set(_webm_dir "${NX_LIBWEBM_SOURCE_DIR}")
-    elseif (EXISTS "${_webm_submodule}/mkvparser/mkvparser.h")
-        set(_webm_dir "${_webm_submodule}")
-        message(STATUS "nx2d: libwebm from submodule")
-    else ()
-        FetchContent_Declare(libwebm
-                GIT_REPOSITORY "${NX_LIBWEBM_REPOSITORY}"
-                GIT_TAG "${NX_LIBWEBM_TAG}"
-                GIT_PROGRESS TRUE
-                SOURCE_SUBDIR "cmake-is-not-here")
-        message(STATUS "nx2d: fetching libwebm ${NX_LIBWEBM_TAG}")
-        FetchContent_MakeAvailable(libwebm)
-        set(_webm_dir "${libwebm_SOURCE_DIR}")
-    endif ()
-    if (NOT EXISTS "${_webm_dir}/mkvparser/mkvparser.h")
-        message(FATAL_ERROR "nx2d: no libwebm at ${_webm_dir}")
-    endif ()
-
-    add_library(nx_webm STATIC
-            "${_webm_dir}/mkvparser/mkvparser.cc"
-            "${_webm_dir}/mkvparser/mkvreader.cc")
-    add_library(nx::webm ALIAS nx_webm)
-    target_include_directories(nx_webm SYSTEM PUBLIC "${_webm_dir}")
-    set_target_properties(nx_webm PROPERTIES FOLDER "third_party")
 
     set(LIBGAV1_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(LIBGAV1_ENABLE_TESTS OFF CACHE BOOL "" FORCE)

@@ -119,7 +119,7 @@ public:
 
   [[nodiscard]] nx::vfs::FileInfo stat(nx::fs::path_view) override {
     nx::vfs::FileInfo info;
-    info.size = nxm::video::MAX_ENCODED_VIDEO_BYTES + 1;
+    info.size = nxm::video::MAX_COOKED_VIDEO_BYTES + 1;
     info.exists = true;
     return info;
   }
@@ -482,7 +482,7 @@ TEST_CASE("video demux: oversized VFS entries are refused before reading") {
       nx::vfs::mount("/oversized-video", device, 200);
   REQUIRE(mount.valid());
 
-  nx::blob<u8> bytes;
+  nxm::video::EncodedVideo bytes;
   CHECK_FALSE(nxm::video::read_video_file("/oversized-video/huge.webm", bytes));
   CHECK(bytes.empty());
   CHECK_FALSE(device->read_called);

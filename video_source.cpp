@@ -41,18 +41,6 @@ namespace {
 
 } // namespace
 
-bool valid_video_dimensions(const u64 width, const u64 height) noexcept {
-  if (width == 0 || height == 0 || width > MAX_VIDEO_DIMENSION ||
-      height > MAX_VIDEO_DIMENSION)
-    return false;
-  const u64 luma = width * height;
-  const u64 chroma_width = width / 2 + width % 2;
-  const u64 chroma_height = height / 2 + height % 2;
-  const u64 chroma = chroma_width * chroma_height;
-  return luma <= MAX_DECODED_VIDEO_FRAME_BYTES &&
-         chroma <= (MAX_DECODED_VIDEO_FRAME_BYTES - luma) / 2;
-}
-
 bool valid_video_frame(const VideoFrame &frame) noexcept {
   if (!valid_video_dimensions(frame.width, frame.height) ||
       !std::isfinite(frame.pts))

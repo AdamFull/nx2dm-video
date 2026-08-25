@@ -1,13 +1,21 @@
 #include "video/video_demux.h"
 
 #include "core/foundation/diagnostics/log.h"
+#include "core/foundation/serialization/asset_policy.h"
 #include "core/foundation/vfs/vfs.h"
 
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace nxm::video {
 namespace {
+
+[[nodiscard]] constexpr bool ends_with(const nx::string_view value,
+                                       const nx::string_view suffix) noexcept {
+  return value.size() >= suffix.size() &&
+         value.substr(value.size() - suffix.size()) == suffix;
+}
 
 [[nodiscard]] ColourInfo classify_colour(const mkvparser::VideoTrack &track,
                                          const u32 height) {
@@ -41,12 +49,40 @@ namespace {
 
 } // namespace
 
-bool read_video_file(const nx::string_view path, nx::blob<u8> &out) noexcept {
+bool read_video_file(const nx::string_view path, EncodedVideo &out) noexcept {
   try {
+    const bool explicit_cooked = ends_with(path, ".nxb");
+    const nx::string cooked =
+        explicit_cooked ? nx::string(path) : cooked_video_path(path);
+    const nx::vfs::FileInfo cooked_info = nx::vfs::stat(cooked.view());
+    if (cooked_info.exists) {
+      if (cooked_info.is_directory ||
+          cooked_info.size > MAX_COOKED_VIDEO_BYTES) {
+        nx::logw("video: cooked media '{}' exceeds the size limit", cooked);
+        return false;
+      }
+      auto bytes = nx::vfs::read(cooked.view());
+      EncodedVideo decoded;
+      if (!bytes || !decode_video_media(std::move(bytes.value()), decoded)) {
+        nx::logw("video: cooked media '{}' is malformed", cooked);
+        return false;
+      }
+      out = std::move(decoded);
+      return true;
+    }
+    if (explicit_cooked || !nx::asset_policy::can_fallback_to_authored_source(
+                               cooked_info.exists)) {
+      nx::logw("video: no cooked media at '{}'", cooked);
+      return false;
+    }
+
     const nx::vfs::FileInfo info = nx::vfs::stat(path);
-    if (info.exists && !info.is_directory &&
-        info.size > MAX_ENCODED_VIDEO_BYTES) {
-      nx::logw("video: '{}' exceeds the encoded-size limit", path);
+    if (!info.exists || info.is_directory) {
+      nx::logw("video: cannot read authored media '{}'", path);
+      return false;
+    }
+    if (info.size > MAX_ENCODED_VIDEO_BYTES) {
+      nx::logw("video: authored media '{}' exceeds the size limit", path);
       return false;
     }
     auto bytes = nx::vfs::read(nx::vfs::path_view(path));
@@ -58,7 +94,10 @@ bool read_video_file(const nx::string_view path, nx::blob<u8> &out) noexcept {
       nx::logw("video: '{}' exceeds the encoded-size limit", path);
       return false;
     }
-    out = std::move(*bytes);
+    EncodedVideo decoded;
+    decoded.storage = std::move(bytes.value());
+    decoded.payload_size = decoded.storage.size();
+    out = std::move(decoded);
     return true;
   } catch (...) {
     return false;

@@ -333,7 +333,7 @@ private:
     return false;
   }
 
-  nx::blob<u8> m_bytes;
+  EncodedVideo m_bytes;
   MemoryReader m_reader{nullptr, 0};
   mkvparser::Segment *m_segment = nullptr;
   const mkvparser::Cluster *m_cluster = nullptr;
@@ -719,7 +719,7 @@ private:
     return false;
   }
 
-  nx::blob<u8> m_bytes;
+  EncodedVideo m_bytes;
   MemoryReader m_reader{nullptr, 0};
   mkvparser::Segment *m_segment = nullptr;
   const mkvparser::Cluster *m_cluster = nullptr;
