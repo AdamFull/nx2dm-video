@@ -20,6 +20,38 @@ set(NX_LIBGAV1_TAG "c1deec657b32b911920c78e078cfd089faa77200"
 set(NX_LIBGAV1_SOURCE_DIR "" CACHE PATH
         "An existing libgav1 checkout. Empty fetches NX_LIBGAV1_TAG.")
 
+function(nx_normalize_libgav1_warnings source_dir)
+    if (NOT (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
+        return()
+    endif ()
+
+    # clang-cl accepts -Wall as the cl-compatible /Wall and expands it to
+    # -Weverything. Libgav1 selects both its Clang and MSVC flag sets under
+    # clang-cl, so retain its explicit -W diagnostics and /W3 while removing
+    # only the accidental all-diagnostics switch from its own targets.
+    get_property(_gav1_targets DIRECTORY "${source_dir}"
+            PROPERTY BUILDSYSTEM_TARGETS)
+    set(_normalized 0)
+    foreach (_target IN LISTS _gav1_targets)
+        if (NOT _target MATCHES "^libgav1")
+            continue()
+        endif ()
+        get_target_property(_options "${_target}" COMPILE_OPTIONS)
+        if (NOT _options)
+            continue()
+        endif ()
+        list(FIND _options "-Wall" _wall_index)
+        if (_wall_index EQUAL -1)
+            continue()
+        endif ()
+        list(REMOVE_ITEM _options "-Wall")
+        set_property(TARGET "${_target}" PROPERTY COMPILE_OPTIONS ${_options})
+        math(EXPR _normalized "${_normalized} + 1")
+    endforeach ()
+    message(STATUS
+            "nx2d: normalized clang-cl warnings for ${_normalized} libgav1 targets")
+endfunction()
+
 function(nx_add_video_container)
     if (TARGET nx_webm)
         return()
@@ -127,6 +159,7 @@ function(nx_add_video_codecs)
     if (NOT TARGET libgav1_static)
         message(FATAL_ERROR "nx2d: libgav1_static was not created")
     endif ()
+    nx_normalize_libgav1_warnings("${_gav1_dir}")
     add_library(nx::gav1 ALIAS libgav1_static)
     target_include_directories(libgav1_static SYSTEM INTERFACE "${_gav1_dir}/src")
     set_target_properties(libgav1_static PROPERTIES FOLDER "third_party")
