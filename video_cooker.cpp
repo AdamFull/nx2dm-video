@@ -65,7 +65,8 @@ inline constexpr nx::asset_contract::Format VIDEO_FORMATS[] = {
 } // namespace
 
 bool nx_assetc_register_video(CookerRegistry &registry, nx::string &error) {
-  return registry.add({"video", VIDEO_FORMATS, 1, cook_video}, error);
+  return registry.add({"video", VIDEO_FORMATS, 1, cook_video, nullptr, {}},
+                      error);
 }
 
 } // namespace assetc

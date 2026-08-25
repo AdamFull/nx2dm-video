@@ -30,6 +30,7 @@ namespace {
 constexpr nx::string_view COMPONENT = "VideoPlayer";
 constexpr nx::string_view PRESENT_SYSTEM = "video.present";
 constexpr nx::string_view DRAW_PASS = "video.draw";
+constexpr nx::string_view MODULE_SLOT = "video";
 constexpr nx::string_view WORLD_SLOT = "world";
 constexpr nx::string_view SHADER = "video/video";
 
@@ -170,8 +171,10 @@ public:
         }));
 
     static constexpr nx::string_view MINE[] = {DRAW_PASS};
-    if (!ctx.fill_pass_slot(WORLD_SLOT, MINE, name()))
-      nx::logw("video: nothing to fill; the frame has no '{}' slot", WORLD_SLOT);
+    const nx::string_view slot =
+        ctx.has_pass_slot(MODULE_SLOT) ? MODULE_SLOT : WORLD_SLOT;
+    if (!ctx.fill_pass_slot(slot, MINE, name()))
+      nx::logw("video: nothing to fill; the frame has no '{}' slot", slot);
 
     m_attached = true;
     nx::logi("video: attached");
