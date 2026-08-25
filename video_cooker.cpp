@@ -4,6 +4,7 @@
 #include "video/video_clip.h"
 
 #include "core/foundation/platform/filesystem.h"
+#include "core/foundation/serialization/json_document.h"
 
 #include <cstdio>
 
@@ -27,9 +28,12 @@ inline constexpr nx::asset_contract::Format VIDEO_FORMATS[] = {
   const auto text = fs::file_read_text(context.source);
   if (!text)
     return false;
+  const auto normalized = nx::json::normalize_asset_document(text->view());
+  if (!normalized)
+    return false;
   nxm::video::VideoClip clip;
   nx::string error;
-  if (!nxm::video::parse_video_clip(text->view(), clip, &error)) {
+  if (!nxm::video::parse_video_clip(normalized->view(), clip, &error)) {
     std::fprintf(stderr, "assetc: video clip '%.*s' is invalid: %.*s\n",
                  static_cast<int>(context.source.size()), context.source.data(),
                  static_cast<int>(error.size()), error.data());
