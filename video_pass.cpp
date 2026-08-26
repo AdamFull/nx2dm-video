@@ -17,6 +17,20 @@ bool VideoRenderer::init(rhi::Device &, const rhi::ShaderHandle shader) {
   return true;
 }
 
+bool VideoRenderer::reload_shader(rhi::Device &device,
+                                  const rhi::ShaderHandle shader) {
+  if (!shader.valid())
+    return false;
+  if (m_pipeline.valid())
+    device.destroy_pipeline(m_pipeline);
+  m_pipeline = {};
+  if (m_shader.valid())
+    device.destroy_shader(m_shader);
+  m_shader = shader;
+  m_format = rhi::Format::Unknown;
+  return true;
+}
+
 void VideoRenderer::shutdown(rhi::Device &device) {
   if (m_pipeline.valid())
     device.destroy_pipeline(m_pipeline);

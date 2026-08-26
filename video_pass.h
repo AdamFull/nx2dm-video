@@ -55,6 +55,10 @@ public:
 
   [[nodiscard]] bool init(nxe::rhi::Device &device,
                           nxe::rhi::ShaderHandle shader);
+  /// Commits an already validated shader generation without disturbing the
+  /// live video sources. Existing pipelines are retired and rebuilt lazily.
+  [[nodiscard]] bool reload_shader(nxe::rhi::Device &device,
+                                   nxe::rhi::ShaderHandle shader);
   void shutdown(nxe::rhi::Device &device);
   [[nodiscard]] bool ready() const noexcept { return m_shader.valid(); }
 

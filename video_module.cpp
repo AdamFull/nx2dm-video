@@ -19,6 +19,7 @@
 #include "core/foundation/containers/small_vector.h"
 #include "core/foundation/core/foundation.h"
 #include "core/foundation/diagnostics/log.h"
+#include "core/foundation/vfs/vfs.h"
 
 #include <atomic>
 #include <span>
@@ -37,16 +38,51 @@ constexpr nx::string_view SHADER = "video/video";
 struct ResolvedClip {
   nx::string source;
   bool loop = true;
+  bool valid = false;
 };
 
 [[nodiscard]] ResolvedClip resolve_clip(const VideoPlayer &player) {
   if (nx::string_view(player.clip).ends_with(".nxvid")) {
     VideoClip clip;
     if (load_video_clip(player.clip, clip))
-      return {clip.source, clip.loop};
-    return {{}, player.looping};
+      return {clip.source, clip.loop, true};
+    return {{}, player.looping, false};
   }
-  return {player.clip, player.looping};
+  return {player.clip, player.looping, !player.clip.empty()};
+}
+
+[[nodiscard]] u64 file_stamp(const nx::string_view path) noexcept {
+  const nx::vfs::FileInfo info = nx::vfs::stat(path);
+  u64 stamp = nx::hash_fnv1a64(path.data(), path.size());
+  const u64 words[] = {info.mtime_ns, info.size, info.exists ? 1ull : 0ull};
+  for (const u64 word : words) {
+    stamp ^= word;
+    stamp *= 1099511628211ull;
+  }
+  return stamp;
+}
+
+[[nodiscard]] nx::string selected_video_file(const nx::string_view path) {
+  if (path.ends_with(".nxb"))
+    return nx::string(path);
+  nx::string cooked = cooked_video_path(path);
+  if (nx::vfs::stat(cooked.view()).exists)
+    return cooked;
+  return nx::string(path);
+}
+
+[[nodiscard]] u64 dependency_stamp(const nx::string_view player_clip,
+                                   const nx::string_view source) noexcept {
+  u64 stamp = 14695981039346656037ull;
+  if (player_clip.ends_with(".nxvid")) {
+    const nx::string selected = selected_video_file(player_clip);
+    stamp ^= file_stamp(selected.view());
+    stamp *= 1099511628211ull;
+  }
+  const nx::string selected_source = selected_video_file(source);
+  stamp ^= file_stamp(selected_source.view());
+  stamp *= 1099511628211ull;
+  return stamp;
 }
 
 struct VideoItem {
@@ -58,6 +94,7 @@ struct VideoItem {
   f64 pts = 0.0;
   bool looping = false;
   nx::string clip;
+  u64 generation = 0;
   nx::shared_ptr<std::atomic<bool>> finished;
 };
 
@@ -88,6 +125,9 @@ struct Decoder {
   nx::string player_clip;
   bool player_looping = true;
   bool loop = true;
+  u64 source_stamp = 0;
+  u64 checked_epoch = 0;
+  u64 generation = 1;
   nx::shared_ptr<std::atomic<bool>> finished =
       nx::make_shared<std::atomic<bool>>(false);
 };
@@ -101,6 +141,7 @@ struct Source {
   nxe::scene::Entity owner{};
   GpuSourcePtr source;
   nx::string clip;
+  u64 generation = 0;
   bool opened = false;
   bool failed = false;
   bool touched = false;
@@ -149,11 +190,6 @@ public:
       return false;
     }
     ctx.schedule().add(nxe::sys::Stage::Present, PRESENT_SYSTEM);
-
-    if (!m_can_draw) {
-      m_attached = true;
-      return true;
-    }
 
     const void *const pass_owner = ctx.passes().owner_of(DRAW_PASS);
     if (pass_owner != nullptr && pass_owner != this) {
@@ -212,6 +248,20 @@ public:
     m_sources.clear();
   }
 
+  void on_hot_reload(nxe::ModuleContext &ctx) override {
+    ++m_reload_epoch;
+    if (!ctx.shader_reloaded(SHADER))
+      return;
+    const nxe::rhi::ShaderHandle shader = ctx.load_shader(SHADER);
+    if (!shader.valid()) {
+      nx::logw("video: changed shader is invalid; keeping the last generation");
+      return;
+    }
+    m_can_draw = m_renderer.reload_shader(ctx.device(), shader);
+    if (m_can_draw)
+      nx::logi("video: renderer shader reloaded");
+  }
+
 private:
   void present(nxe::ModuleContext &ctx, const f64 dt) {
     nxe::r2d::FramePacket *const packet = ctx.frame_packet();
@@ -257,6 +307,9 @@ private:
         decoder.player_clip = player.clip;
         player.looping = resolved.loop;
         decoder.player_looping = player.looping;
+        decoder.source_stamp =
+            dependency_stamp(player.clip.view(), decoder.source.view());
+        decoder.checked_epoch = m_reload_epoch;
         if (m_audio_enabled)
           start_audio(ctx, decoder);
       } else if (player.clip != decoder.player_clip) {
@@ -274,10 +327,44 @@ private:
         decoder.player_clip = player.clip;
         player.looping = resolved.loop;
         decoder.player_looping = player.looping;
+        decoder.source_stamp =
+            dependency_stamp(player.clip.view(), decoder.source.view());
+        decoder.checked_epoch = m_reload_epoch;
+        ++decoder.generation;
         decoder.clock = 0.0;
         decoder.finished->store(false, std::memory_order_relaxed);
         if (m_audio_enabled)
           start_audio(ctx, decoder);
+      }
+
+
+      if (decoder.checked_epoch != m_reload_epoch) {
+        decoder.checked_epoch = m_reload_epoch;
+        const u64 probed =
+            dependency_stamp(player.clip.view(), decoder.source.view());
+        if (probed != decoder.source_stamp) {
+          const ResolvedClip resolved = resolve_clip(player);
+          if (!resolved.valid) {
+            // Remember the rejected descriptor generation without disturbing
+            // the decoder. A subsequent save changes the stamp and retries.
+            decoder.source_stamp = probed;
+          } else {
+            decoder.source = resolved.source;
+            decoder.loop = resolved.loop;
+            player.looping = resolved.loop;
+            decoder.player_looping = resolved.loop;
+            decoder.source_stamp = dependency_stamp(
+                player.clip.view(), decoder.source.view());
+            decoder.finished->store(false, std::memory_order_relaxed);
+            ++decoder.generation;
+            if (decoder.audio_started)
+              reseat_audio(ctx, decoder, decoder.clock);
+            else if (m_audio_enabled)
+              start_audio(ctx, decoder, decoder.clock);
+            nx::logi("video: reloaded '{}' at {:.3f}s", player.clip,
+                     decoder.clock);
+          }
+        }
       }
 
       if (player.looping != decoder.player_looping) {
@@ -329,6 +416,7 @@ private:
       }
       item.pts = decoder.clock;
       item.clip = decoder.source;
+      item.generation = decoder.generation;
       item.looping = decoder.loop;
       item.finished = decoder.finished;
       channel.items.push_back(std::move(item));
@@ -380,9 +468,10 @@ private:
               : item.rect;
 
       Source &clip = source_for(item.owner);
-      if (clip.clip != item.clip) {
+      if (clip.clip != item.clip || clip.generation != item.generation) {
         clip.source.reset();
         clip.clip = item.clip;
+        clip.generation = item.generation;
         clip.opened = false;
         clip.failed = false;
       }
@@ -533,6 +622,7 @@ private:
   bool m_can_draw = false;
   bool m_audio_enabled = true;
   bool m_attached = false;
+  u64 m_reload_epoch = 1;
 };
 
 }
