@@ -18,6 +18,7 @@
 #include "core/foundation/containers/blob.h"
 #include "core/foundation/containers/small_vector.h"
 #include "core/foundation/core/foundation.h"
+#include "core/foundation/core/hash.h"
 #include "core/foundation/diagnostics/log.h"
 #include "core/foundation/vfs/vfs.h"
 
@@ -52,14 +53,7 @@ struct ResolvedClip {
 }
 
 [[nodiscard]] u64 file_stamp(const nx::string_view path) noexcept {
-  const nx::vfs::FileInfo info = nx::vfs::stat(path);
-  u64 stamp = nx::hash_fnv1a64(path.data(), path.size());
-  const u64 words[] = {info.mtime_ns, info.size, info.exists ? 1ull : 0ull};
-  for (const u64 word : words) {
-    stamp ^= word;
-    stamp *= 1099511628211ull;
-  }
-  return stamp;
+  return nx::vfs::file_generation(path);
 }
 
 [[nodiscard]] nx::string selected_video_file(const nx::string_view path) {
@@ -73,16 +67,13 @@ struct ResolvedClip {
 
 [[nodiscard]] u64 dependency_stamp(const nx::string_view player_clip,
                                    const nx::string_view source) noexcept {
-  u64 stamp = 14695981039346656037ull;
+  nx::fnv1a64 stamp;
   if (player_clip.ends_with(".nxvid")) {
     const nx::string selected = selected_video_file(player_clip);
-    stamp ^= file_stamp(selected.view());
-    stamp *= 1099511628211ull;
+    stamp.combine(file_stamp(selected.view()));
   }
   const nx::string selected_source = selected_video_file(source);
-  stamp ^= file_stamp(selected_source.view());
-  stamp *= 1099511628211ull;
-  return stamp;
+  return stamp.combine(file_stamp(selected_source.view())).value();
 }
 
 struct VideoItem {
