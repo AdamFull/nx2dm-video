@@ -24,7 +24,7 @@ inline constexpr nx::asset_contract::Format VIDEO_FORMATS[] = {
                                context.output, {bytes.data(), bytes.size()}));
 }
 
-[[nodiscard]] bool cook_clip(const CookContext &context) {
+[[nodiscard]] bool cook_clip(const CookContext &context, CookOutputs &) {
   const auto text = fs::file_read_text(context.source);
   if (!text)
     return false;
@@ -42,7 +42,7 @@ inline constexpr nx::asset_contract::Format VIDEO_FORMATS[] = {
   return write(context, nxm::video::encode_video_clip(clip));
 }
 
-[[nodiscard]] bool cook_media(const CookContext &context) {
+[[nodiscard]] bool cook_media(const CookContext &context, CookOutputs &) {
   const auto encoded = fs::file_read(context.source);
   if (!encoded)
     return false;
@@ -58,11 +58,12 @@ inline constexpr nx::asset_contract::Format VIDEO_FORMATS[] = {
   return write(context, cooked.value());
 }
 
-[[nodiscard]] bool cook_video(const CookContext &context) {
+[[nodiscard]] bool cook_video(const CookContext &context,
+                              CookOutputs &outputs) {
   if (context.source.ends_with(".nxvid"))
-    return cook_clip(context);
+    return cook_clip(context, outputs);
   if (context.source.ends_with(".webm"))
-    return cook_media(context);
+    return cook_media(context, outputs);
   return false;
 }
 
