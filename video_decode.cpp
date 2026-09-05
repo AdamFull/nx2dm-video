@@ -100,7 +100,7 @@ public:
       nx::logw("video: cannot init VP9 decoder for '{}'", path);
       return false;
     }
-    nx::logi("video: '{}' VP9 {}x{}", path, m_demux.width(), m_demux.height());
+    nx::logd("video: '{}' VP9 {}x{}", path, m_demux.width(), m_demux.height());
     return true;
   }
 
@@ -314,7 +314,7 @@ public:
       nx::logw("video: cannot init AV1 decoder for '{}'", path);
       return false;
     }
-    nx::logi("video: '{}' AV1 {}x{}", path, m_demux.width(), m_demux.height());
+    nx::logd("video: '{}' AV1 {}x{}", path, m_demux.width(), m_demux.height());
     return true;
   }
 

@@ -250,7 +250,7 @@ public:
     }
     m_can_draw = m_renderer.reload_shader(ctx.device(), shader);
     if (m_can_draw)
-      nx::logi("video: renderer shader reloaded");
+      nx::logd("video: renderer shader reloaded");
   }
 
 private:
@@ -352,7 +352,7 @@ private:
               reseat_audio(ctx, decoder, decoder.clock);
             else if (m_audio_enabled)
               start_audio(ctx, decoder, decoder.clock);
-            nx::logi("video: reloaded '{}' at {:.3f}s", player.clip,
+            nx::logd("video: reloaded '{}' at {:.3f}s", player.clip,
                      decoder.clock);
           }
         }

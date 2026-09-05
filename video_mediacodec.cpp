@@ -151,7 +151,7 @@ public:
       return false;
     }
     m_has_pending = true;
-    nx::logi("video: '{}' MediaCodec {} {}x{}", path, m_mime, m_width,
+    nx::logd("video: '{}' MediaCodec {} {}x{}", path, m_mime, m_width,
              m_height);
     return true;
   }
