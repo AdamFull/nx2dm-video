@@ -10,69 +10,6 @@ namespace rhi = nxe::rhi;
 namespace rg = nxe::rg;
 } // namespace
 
-bool VideoRenderer::init(rhi::Device &, const rhi::ShaderHandle shader) {
-  if (!shader.valid())
-    return false;
-  m_shader = shader;
-  return true;
-}
-
-bool VideoRenderer::reload_shader(rhi::Device &device,
-                                  const rhi::ShaderHandle shader) {
-  if (!shader.valid())
-    return false;
-  if (m_pipeline.valid())
-    device.destroy_pipeline(m_pipeline);
-  m_pipeline = {};
-  if (m_shader.valid())
-    device.destroy_shader(m_shader);
-  m_shader = shader;
-  m_format = rhi::Format::Unknown;
-  return true;
-}
-
-void VideoRenderer::shutdown(rhi::Device &device) {
-  if (m_pipeline.valid())
-    device.destroy_pipeline(m_pipeline);
-  m_pipeline = {};
-  if (m_shader.valid())
-    device.destroy_shader(m_shader);
-  m_shader = {};
-  m_format = rhi::Format::Unknown;
-}
-
-bool VideoRenderer::ensure_pipeline(rhi::Device &device,
-                                    const rhi::Format format) {
-  if (format == m_format && m_pipeline.valid())
-    return true;
-
-  if (m_pipeline.valid())
-    device.destroy_pipeline(m_pipeline);
-
-  m_pipeline = device.create_graphics_pipeline({
-      .name = "video",
-      .vertex = {.shader = m_shader, .entry_point = "vs_main"},
-      .fragment = {.shader = m_shader, .entry_point = "fs_main"},
-      .color_formats = {format},
-      .color_count = 1,
-  });
-  if (!m_pipeline.valid())
-    return false;
-  m_format = format;
-  return true;
-}
-
-void VideoRenderer::draw(rhi::Device &device, rg::RenderGraph &graph,
-                         const rg::TextureId target, const rhi::Format format,
-                         const std::span<const VideoDraw> draws) {
-  if (draws.empty() || !ready() || !target.valid())
-    return;
-  if (!ensure_pipeline(device, format))
-    return;
-
-  draw(device, graph, target, m_pipeline, draws);
-}
-
 void VideoRenderer::draw(rhi::Device &device, rg::RenderGraph &graph,
                          const rg::TextureId target,
                          const rhi::PipelineHandle pipeline,

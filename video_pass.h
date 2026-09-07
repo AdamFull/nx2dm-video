@@ -53,31 +53,11 @@ public:
   VideoRenderer(const VideoRenderer &) = delete;
   VideoRenderer &operator=(const VideoRenderer &) = delete;
 
-  [[nodiscard]] bool init(nxe::rhi::Device &device,
-                          nxe::rhi::ShaderHandle shader);
-  /// Commits an already validated shader generation without disturbing the
-  /// live video sources. Existing pipelines are retired and rebuilt lazily.
-  [[nodiscard]] bool reload_shader(nxe::rhi::Device &device,
-                                   nxe::rhi::ShaderHandle shader);
-  void shutdown(nxe::rhi::Device &device);
-  [[nodiscard]] bool ready() const noexcept { return m_shader.valid(); }
-
-  void draw(nxe::rhi::Device &device, nxe::rg::RenderGraph &graph,
-            nxe::rg::TextureId target, nxe::rhi::Format format,
-            std::span<const VideoDraw> draws);
   /// Records with a runtime-owned pipeline. The renderer does not retain or
   /// destroy it.
   void draw(nxe::rhi::Device &device, nxe::rg::RenderGraph &graph,
             nxe::rg::TextureId target, nxe::rhi::PipelineHandle pipeline,
             std::span<const VideoDraw> draws);
-
-private:
-  [[nodiscard]] bool ensure_pipeline(nxe::rhi::Device &device,
-                                     nxe::rhi::Format format);
-
-  nxe::rhi::ShaderHandle m_shader;
-  nxe::rhi::PipelineHandle m_pipeline;
-  nxe::rhi::Format m_format = nxe::rhi::Format::Unknown;
 };
 
 } // namespace nxm::video

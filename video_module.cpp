@@ -175,7 +175,6 @@ public:
             }))) {
       nx::logw("video: system '{}' is already owned by another module",
                PRESENT_SYSTEM);
-      m_renderer.shutdown(ctx.device());
       m_can_draw = false;
       return false;
     }
@@ -185,7 +184,6 @@ public:
     if (pass_owner != nullptr && pass_owner != this) {
       nx::logw("video: pass '{}' is already owned by another module",
                DRAW_PASS);
-      m_renderer.shutdown(ctx.device());
       m_can_draw = false;
       return false;
     }
@@ -226,7 +224,6 @@ public:
         m_decoders.pop_back();
       }
     m_sources.clear();
-    m_renderer.shutdown(ctx.device());
     if (m_pipeline_request.valid())
       (void)ctx.release_pipeline_load(m_pipeline_request);
     m_pipeline_request = {};
