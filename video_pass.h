@@ -65,6 +65,11 @@ public:
   void draw(nxe::rhi::Device &device, nxe::rg::RenderGraph &graph,
             nxe::rg::TextureId target, nxe::rhi::Format format,
             std::span<const VideoDraw> draws);
+  /// Records with a runtime-owned pipeline. The renderer does not retain or
+  /// destroy it.
+  void draw(nxe::rhi::Device &device, nxe::rg::RenderGraph &graph,
+            nxe::rg::TextureId target, nxe::rhi::PipelineHandle pipeline,
+            std::span<const VideoDraw> draws);
 
 private:
   [[nodiscard]] bool ensure_pipeline(nxe::rhi::Device &device,
@@ -75,4 +80,4 @@ private:
   nxe::rhi::Format m_format = nxe::rhi::Format::Unknown;
 };
 
-}
+} // namespace nxm::video

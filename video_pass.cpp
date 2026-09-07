@@ -8,7 +8,7 @@ namespace nxm::video {
 namespace {
 namespace rhi = nxe::rhi;
 namespace rg = nxe::rg;
-}
+} // namespace
 
 bool VideoRenderer::init(rhi::Device &, const rhi::ShaderHandle shader) {
   if (!shader.valid())
@@ -70,13 +70,23 @@ void VideoRenderer::draw(rhi::Device &device, rg::RenderGraph &graph,
   if (!ensure_pipeline(device, format))
     return;
 
+  draw(device, graph, target, m_pipeline, draws);
+}
+
+void VideoRenderer::draw(rhi::Device &device, rg::RenderGraph &graph,
+                         const rg::TextureId target,
+                         const rhi::PipelineHandle pipeline,
+                         const std::span<const VideoDraw> draws) {
+  if (draws.empty() || !pipeline.valid() || !target.valid())
+    return;
+
   nx::vector<VideoDraw> local(draws.begin(), draws.end());
   graph.add_pass(
       "video.draw",
       rg::SetupFn([target](rg::Builder &builder) { builder.color(0, target); }),
-      rg::ExecuteFn([this, &device, local = std::move(local)](
+      rg::ExecuteFn([pipeline, &device, local = std::move(local)](
                         rhi::CommandContext &cmd, const rg::Resources &) {
-        cmd.bind_pipeline(m_pipeline);
+        cmd.bind_pipeline(pipeline);
         for (const VideoDraw &d : local) {
           VideoPush push;
           push.rect = d.rect;
@@ -92,4 +102,4 @@ void VideoRenderer::draw(rhi::Device &device, rg::RenderGraph &graph,
       }));
 }
 
-}
+} // namespace nxm::video

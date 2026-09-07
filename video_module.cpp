@@ -99,9 +99,10 @@ struct Active {
   VideoPlayer *player = nullptr;
 };
 
-/// The video decode lives render-side now (see Source), so this never touches the device - it
-/// advances the clock the render thread paces the picture against, and reads end-of-stream back
-/// through the atomic the render thread writes.
+/// The video decode lives render-side now (see Source), so this never touches
+/// the device - it advances the clock the render thread paces the picture
+/// against, and reads end-of-stream back through the atomic the render thread
+/// writes.
 struct Decoder {
   nxe::scene::Entity owner{};
   nx::unique_ptr<nxe::audio::AudioStream> audio;
@@ -164,9 +165,7 @@ public:
       return true;
 
     m_audio_enabled = ctx.config().audio;
-    m_can_draw = m_renderer.init(ctx.device(), ctx.load_shader(SHADER));
-    if (!m_can_draw)
-      nx::logw("video: no renderer; clips will not draw");
+    m_can_draw = true;
     m_sampler = ctx.samplers().index(nxe::scene::sampler_bilinear());
 
     if (!ctx.schedule().try_define(
@@ -191,11 +190,11 @@ public:
       return false;
     }
 
-    ctx.passes().define(
-        DRAW_PASS, nxe::PassFn([this, &ctx](nxe::rg::RenderGraph &graph,
-                                            nxe::RenderContext &context) {
-          record(ctx, graph, context);
-        }));
+    ctx.passes().define(DRAW_PASS,
+                        nxe::PassFn([this, &ctx](nxe::rg::RenderGraph &graph,
+                                                 nxe::RenderContext &context) {
+                          record(ctx, graph, context);
+                        }));
 
     static constexpr nx::string_view MINE[] = {DRAW_PASS};
     const nx::string_view slot =
@@ -228,6 +227,10 @@ public:
       }
     m_sources.clear();
     m_renderer.shutdown(ctx.device());
+    if (m_pipeline_request.valid())
+      (void)ctx.release_pipeline_load(m_pipeline_request);
+    m_pipeline_request = {};
+    m_pipeline_format = nxe::rhi::Format::Unknown;
     m_sampler = 0;
     m_can_draw = false;
     m_attached = false;
@@ -243,14 +246,10 @@ public:
     ++m_reload_epoch;
     if (!ctx.shader_reloaded(SHADER))
       return;
-    const nxe::rhi::ShaderHandle shader = ctx.load_shader(SHADER);
-    if (!shader.valid()) {
-      nx::logw("video: changed shader is invalid; keeping the last generation");
-      return;
-    }
-    m_can_draw = m_renderer.reload_shader(ctx.device(), shader);
-    if (m_can_draw)
-      nx::logd("video: renderer shader reloaded");
+    if (m_pipeline_request.valid())
+      (void)ctx.release_pipeline_load(m_pipeline_request);
+    m_pipeline_request = {};
+    m_pipeline_format = nxe::rhi::Format::Unknown;
   }
 
 private:
@@ -307,8 +306,7 @@ private:
         if (decoder.audio_started) {
           if (ctx.mixer().valid())
             ctx.mixer().stop(decoder.voice);
-          m_dying_streams.push_back(
-              {std::move(decoder.audio), decoder.voice});
+          m_dying_streams.push_back({std::move(decoder.audio), decoder.voice});
           decoder.voice = {};
           decoder.audio_started = false;
         }
@@ -328,7 +326,6 @@ private:
           start_audio(ctx, decoder);
       }
 
-
       if (decoder.checked_epoch != m_reload_epoch) {
         decoder.checked_epoch = m_reload_epoch;
         const u64 probed =
@@ -344,8 +341,8 @@ private:
             decoder.loop = resolved.loop;
             player.looping = resolved.loop;
             decoder.player_looping = resolved.loop;
-            decoder.source_stamp = dependency_stamp(
-                player.clip.view(), decoder.source.view());
+            decoder.source_stamp =
+                dependency_stamp(player.clip.view(), decoder.source.view());
             decoder.finished->store(false, std::memory_order_relaxed);
             ++decoder.generation;
             if (decoder.audio_started)
@@ -390,8 +387,9 @@ private:
       }
 
       player.position = decoder.clock;
-      // End-of-stream comes back through the atomic the render thread wrote last
-      // tick - the one clean render->simulation signal the packet model lacks.
+      // End-of-stream comes back through the atomic the render thread wrote
+      // last tick - the one clean render->simulation signal the packet model
+      // lacks.
       player.finished = decoder.finished->load(std::memory_order_relaxed);
 
       VideoItem item;
@@ -402,8 +400,8 @@ private:
         item.eye = cam_eye;
         item.half_h = cam_half_h;
       } else {
-        item.rect = player.fullscreen ? glm::vec4{-1.f, -1.f, 1.f, 1.f}
-                                      : player.rect;
+        item.rect =
+            player.fullscreen ? glm::vec4{-1.f, -1.f, 1.f, 1.f} : player.rect;
       }
       item.pts = decoder.clock;
       item.clip = decoder.source;
@@ -499,8 +497,24 @@ private:
         ctx.config().scene_format == nxe::rhi::Format::Unknown
             ? device.swapchain_format()
             : ctx.config().scene_format;
+    if (format != m_pipeline_format) {
+      if (m_pipeline_request.valid())
+        (void)ctx.release_pipeline_load(m_pipeline_request);
+      m_pipeline_request = {};
+      m_pipeline_format = format;
+    }
+    if (!m_pipeline_request.valid()) {
+      nxe::rhi::GraphicsPipelineDesc desc;
+      desc.name = "video";
+      desc.vertex.entry_point = "vs_main";
+      desc.fragment.entry_point = "fs_main";
+      desc.color_formats[0] = format;
+      desc.color_count = 1;
+      m_pipeline_request = ctx.load_graphics_pipeline_async(SHADER, desc);
+    }
     m_renderer.draw(device, graph, context.target(nxe::TARGET_SCENE_COLOR),
-                    format, std::span<const VideoDraw>(draws.data(), draws.size()));
+                    ctx.loaded_pipeline(m_pipeline_request),
+                    std::span<const VideoDraw>(draws.data(), draws.size()));
   }
 
   [[nodiscard]] Decoder &decoder_for(const nxe::scene::Entity entity) {
@@ -605,6 +619,8 @@ private:
   }
 
   VideoRenderer m_renderer;
+  nxe::PipelineLoadRequest m_pipeline_request;
+  nxe::rhi::Format m_pipeline_format = nxe::rhi::Format::Unknown;
   nx::vector<nx::unique_ptr<Decoder>> m_decoders;
   nx::vector<nx::unique_ptr<Decoder>> m_dying;
   nx::vector<DyingStream> m_dying_streams;
@@ -616,7 +632,7 @@ private:
   u64 m_reload_epoch = 1;
 };
 
-}
-}
+} // namespace
+} // namespace nxm::video
 
 NX_DECLARE_MODULE(video, nxm::video::VideoModule)
