@@ -65,7 +65,11 @@ VertexOutput vs_main(uint vertex_id: SV_VertexID) {
 [shader("fragment")]
 float4 fs_main(VertexOutput input): SV_Target {
     const float2 uv = input.uv * pc.uv_scale;
-    const float  y  = sample_texture(pc.luma,   pc.sampler_index, uv).r;
-    const float2 c  = sample_texture(pc.chroma, pc.sampler_index, uv).rg;
+    const NxTexture2D<float4> luma =
+        NxTexture2D<float4>.from_indices(pc.luma, pc.sampler_index);
+    const NxTexture2D<float4> chroma =
+        NxTexture2D<float4>.from_indices(pc.chroma, pc.sampler_index);
+    const float y = luma.sample(uv).r;
+    const float2 c = chroma.sample(uv).rg;
     return float4(ycbcr_to_rgb(y, c.r, c.g), 1.0);
 }
