@@ -1,5 +1,5 @@
 
-import bindless;
+import nx_core;
 
 // Vectors first, then scalars: that order is 8-aligned identically under the
 // shader's std430 and the C++ glm mirror, so neither side needs padding to guess.
@@ -8,10 +8,10 @@ struct VideoPush {
     float2 uv_scale;
     float2 luma_weights;
 
-    uint luma;
-    uint chroma;
-    uint sampler_index;
+    NxTexture2D<float4> luma;
+    NxTexture2D<float4> chroma;
     uint full_range;
+    uint _pad0;
 };
 
 [[vk::push_constant]]
@@ -65,11 +65,7 @@ VertexOutput vs_main(uint vertex_id: SV_VertexID) {
 [shader("fragment")]
 float4 fs_main(VertexOutput input): SV_Target {
     const float2 uv = input.uv * pc.uv_scale;
-    const NxTexture2D<float4> luma =
-        NxTexture2D<float4>.from_indices(pc.luma, pc.sampler_index);
-    const NxTexture2D<float4> chroma =
-        NxTexture2D<float4>.from_indices(pc.chroma, pc.sampler_index);
-    const float y = luma.sample(uv).r;
-    const float2 c = chroma.sample(uv).rg;
+    const float y = pc.luma.sample(uv).r;
+    const float2 c = pc.chroma.sample(uv).rg;
     return float4(ycbcr_to_rgb(y, c.r, c.g), 1.0);
 }

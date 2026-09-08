@@ -1,6 +1,7 @@
 #include "video/video_pass.h"
 
 #include "core/foundation/containers/blob.h"
+#include "core/rendering/render2d/render_interop.h"
 
 #include <utility>
 
@@ -29,9 +30,10 @@ void VideoRenderer::draw(rhi::Device &device, rg::RenderGraph &graph,
           push.rect = d.rect;
           push.uv_scale = d.uv_scale;
           push.luma_weights = luma_coeffs(d.colour.matrix);
-          push.luma = device.texture_index(d.luma);
-          push.chroma = device.texture_index(d.chroma);
-          push.sampler_index = d.sampler_index;
+          push.luma = nx_texture_2d<float4>(
+              pack_texture(device.texture_index(d.luma), d.sampler_index));
+          push.chroma = nx_texture_2d<float4>(
+              pack_texture(device.texture_index(d.chroma), d.sampler_index));
           push.full_range = d.colour.full_range ? 1u : 0u;
           cmd.push_constants(&push, sizeof(push));
           cmd.draw(6);

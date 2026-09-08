@@ -2,6 +2,7 @@
 #include "framework/nxtest.h"
 
 #include "core/foundation/platform/filesystem.h"
+#include "core/rendering/render2d/render_interop.h"
 #include "core/rendering/rhi/rhi.h"
 
 #include <cstring>
@@ -17,10 +18,10 @@ struct VideoPush {
   float rect[4] = {-1.f, -1.f, 1.f, 1.f};
   float uv_scale[2] = {1.f, 1.f};
   float luma_weights[2] = {0.2126f, 0.0722f};
-  u32 luma = 0;
-  u32 chroma = 0;
-  u32 sampler_index = 0;
+  NxTexture2D<float4> luma{};
+  NxTexture2D<float4> chroma{};
   u32 full_range = 0;
+  u32 _pad0 = 0;
 };
 
 struct TestDevice {
@@ -54,9 +55,9 @@ struct TestDevice {
   });
 }
 
-[[nodiscard]] rhi::TextureHandle upload(rhi::Device &device, const rhi::Format fmt,
-                                        const u32 width, const u32 height,
-                                        const u32 row_pitch,
+[[nodiscard]] rhi::TextureHandle upload(rhi::Device &device,
+                                        const rhi::Format fmt, const u32 width,
+                                        const u32 height, const u32 row_pitch,
                                         const std::vector<u8> &data,
                                         const nx::string_view name) {
   const rhi::TextureHandle tex = device.create_texture({
@@ -83,7 +84,8 @@ struct TestDevice {
 
 [[nodiscard]] rhi::TextureHandle make_luma(rhi::Device &device,
                                            const std::vector<u8> &y) {
-  return upload(device, rhi::Format::R8_UNORM, TARGET, TARGET, TARGET, y, "luma");
+  return upload(device, rhi::Format::R8_UNORM, TARGET, TARGET, TARGET, y,
+                "luma");
 }
 
 [[nodiscard]] rhi::TextureHandle make_chroma(rhi::Device &device, const u8 cb,
@@ -105,7 +107,8 @@ struct Rendered {
 
 [[nodiscard]] Rendered draw(rhi::Device &device, rhi::ShaderHandle shader,
                             rhi::TextureHandle luma, rhi::TextureHandle chroma,
-                            rhi::TextureHandle target, rhi::SamplerHandle sampler,
+                            rhi::TextureHandle target,
+                            rhi::SamplerHandle sampler,
                             const float kr = 0.2126f, const float kb = 0.0722f,
                             const u32 full_range = 0) {
   const rhi::PipelineHandle pipeline = device.create_graphics_pipeline({
@@ -119,9 +122,11 @@ struct Rendered {
     return {};
 
   VideoPush push;
-  push.luma = device.texture_index(luma);
-  push.chroma = device.texture_index(chroma);
-  push.sampler_index = device.sampler_index(sampler);
+  const u32 sampler_index = device.sampler_index(sampler);
+  push.luma = nx_texture_2d<float4>(
+      pack_texture(device.texture_index(luma), sampler_index));
+  push.chroma = nx_texture_2d<float4>(
+      pack_texture(device.texture_index(chroma), sampler_index));
   push.luma_weights[0] = kr;
   push.luma_weights[1] = kb;
   push.full_range = full_range;
@@ -181,7 +186,7 @@ struct Rendered {
   return (nx::cast<usize>(row) * TARGET + col) * 4;
 }
 
-}
+} // namespace
 
 TEST_CASE("video shader: a grey frame converts to grey (BT.709)") {
   TestDevice fixture;
@@ -249,18 +254,18 @@ TEST_CASE("video shader: the colour matrix and range change the result") {
 
   const usize mid = texel(TARGET / 2, TARGET / 2);
 
-  const Rendered a = draw(device, shader, luma, chroma, target, sampler, 0.2126f,
-                          0.0722f, 0);
+  const Rendered a =
+      draw(device, shader, luma, chroma, target, sampler, 0.2126f, 0.0722f, 0);
   REQUIRE(a.ok);
   const int r709 = a.pixels.data[mid + 0];
 
-  const Rendered b = draw(device, shader, luma, chroma, target, sampler, 0.299f,
-                          0.114f, 0);
+  const Rendered b =
+      draw(device, shader, luma, chroma, target, sampler, 0.299f, 0.114f, 0);
   REQUIRE(b.ok);
   const int r601 = b.pixels.data[mid + 0];
 
-  const Rendered c = draw(device, shader, luma, chroma, target, sampler, 0.2126f,
-                          0.0722f, 1);
+  const Rendered c =
+      draw(device, shader, luma, chroma, target, sampler, 0.2126f, 0.0722f, 1);
   REQUIRE(c.ok);
   const int rfull = c.pixels.data[mid + 0];
 

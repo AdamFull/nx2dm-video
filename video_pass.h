@@ -17,10 +17,10 @@ struct VideoPush {
   glm::vec4 rect{-1.f, -1.f, 1.f, 1.f};
   glm::vec2 uv_scale{1.f, 1.f};
   glm::vec2 luma_weights{0.2126f, 0.0722f};
-  u32 luma = 0;
-  u32 chroma = 0;
-  u32 sampler_index = 0;
+  NxTexture2D<glm::vec4> luma{};
+  NxTexture2D<glm::vec4> chroma{};
   u32 full_range = 0;
+  u32 _pad0 = 0;
 };
 static_assert(sizeof(VideoPush) <= nxe::rhi::PUSH_CONSTANT_SIZE,
               "the video push block must fit the guaranteed push range");
