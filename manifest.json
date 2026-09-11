@@ -1,0 +1,11 @@
+{
+  "name": "video",
+  "displayName": "WebM video playback",
+  "version": "1.0.0",
+  "author": "AdamFull",
+  "description": "Validates and cooks WebM, decodes on hardware or CPU, and presents fullscreen or world-space video.",
+  "license": null,
+  "created": "2026-08-11",
+  "repository": null,
+  "revision": null
+}
