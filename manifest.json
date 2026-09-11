@@ -6,6 +6,12 @@
   "description": "Validates and cooks WebM, decodes on hardware or CPU, and presents fullscreen or world-space video.",
   "license": null,
   "created": "2026-08-11",
-  "repository": null,
-  "revision": null
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AdamFull/nx2dm-video.git"
+  },
+  "revision": {
+    "branch": "main",
+    "commit": "98b7eb2b9218cd878a9bbc144942dd43cd9cedd2"
+  }
 }

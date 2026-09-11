@@ -1,0 +1,6 @@
+[submodule "third_party/libwebm"]
+	path = third_party/libwebm
+	url = https://github.com/webmproject/libwebm.git
+[submodule "third_party/libvpx"]
+	path = third_party/libvpx
+	url = https://github.com/webmproject/libvpx.git
