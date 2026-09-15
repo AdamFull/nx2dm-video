@@ -2,8 +2,8 @@
 #include "framework/nxtest.h"
 
 #include "core/foundation/platform/filesystem.h"
-#include "core/rendering/render2d/render_interop.h"
-#include "core/rendering/rhi/rhi.h"
+#include "rendering/render2d/render_interop.h"
+#include "rendering/rhi/rhi.h"
 
 #include <cstring>
 #include <vector>

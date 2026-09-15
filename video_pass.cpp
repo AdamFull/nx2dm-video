@@ -1,7 +1,7 @@
 #include "video/video_pass.h"
 
 #include "core/foundation/containers/blob.h"
-#include "core/rendering/render2d/render_interop.h"
+#include "rendering/render2d/render_interop.h"
 
 #include <utility>
 

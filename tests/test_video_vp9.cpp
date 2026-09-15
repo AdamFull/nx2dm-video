@@ -3,9 +3,9 @@
 
 #include "video/video_hw.h"
 
-#include "core/rendering/rhi/device.h"
-#include "core/rendering/rhi/vulkan/vk_video.h"
-#include "core/rendering/rhi/vulkan/vk_vp9.h"
+#include "rendering/rhi/device.h"
+#include "rendering/rhi/vulkan/vk_video.h"
+#include "rendering/rhi/vulkan/vk_vp9.h"
 
 #include "core/foundation/vfs/vfs.h"
 

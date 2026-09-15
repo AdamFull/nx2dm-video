@@ -2,7 +2,7 @@
 
 #include "video/video_source.h"
 
-#include "core/rendering/rhi/device.h"
+#include "rendering/rhi/device.h"
 
 #include "core/foundation/strings/utf8_string_view.h"
 

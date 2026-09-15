@@ -1,8 +1,8 @@
 
 #include "framework/nxtest.h"
 
-#include "core/app/engine.h"
-#include "core/script/script_host.h"
+#include "app/engine.h"
+#include "script/script_host.h"
 #include "video/video_scripting.h"
 
 namespace {

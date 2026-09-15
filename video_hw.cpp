@@ -10,7 +10,7 @@ namespace nxm::video {
 #if defined(NX_RHI_VULKAN)
 }
 
-#include "core/rendering/rhi/vulkan/vk_video.h"
+#include "rendering/rhi/vulkan/vk_video.h"
 
 #include "video/video_demux.h"
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/scene/components.h"
+#include "scene/components.h"
 
 #include <glm/vec4.hpp>
 

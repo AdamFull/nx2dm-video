@@ -4,7 +4,7 @@
 #include "video/video_hw.h"
 #include "video/video_mediacodec.h"
 
-#include "core/rendering/rhi/descs.h"
+#include "rendering/rhi/descs.h"
 
 #include <cmath>
 #include <memory>

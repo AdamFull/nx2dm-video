@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/audio/decoder.h"
+#include "audio/decoder.h"
 #include "core/foundation/strings/utf8_string_view.h"
 
 namespace nxm::video {

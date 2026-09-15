@@ -2,10 +2,10 @@
 
 #include "video/video_source.h"
 
-#include "core/rendering/graph/render_graph.h"
-#include "core/rendering/rhi/bindless.h"
-#include "core/rendering/rhi/descs.h"
-#include "core/rendering/rhi/device.h"
+#include "rendering/graph/render_graph.h"
+#include "rendering/rhi/bindless.h"
+#include "rendering/rhi/descs.h"
+#include "rendering/rhi/device.h"
 
 #include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
