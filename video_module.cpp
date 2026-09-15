@@ -8,7 +8,7 @@
 #include "video/video_scripting.h"
 
 #include "core/app/engine.h"
-#include "core/app/module.h"
+#include "core/app/module_system/module.h"
 #include "core/audio/mixer.h"
 #include "core/audio/stream.h"
 #include "core/scene/components.h"
