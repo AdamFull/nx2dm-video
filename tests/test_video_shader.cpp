@@ -2,6 +2,7 @@
 #include "framework/nxtest.h"
 
 #include "core/foundation/platform/filesystem.h"
+#include "rendering/pipeline_test_utils.h"
 #include "rendering/render2d/render_interop.h"
 #include "rendering/rhi/rhi.h"
 
@@ -111,7 +112,7 @@ struct Rendered {
                             rhi::SamplerHandle sampler,
                             const float kr = 0.2126f, const float kb = 0.0722f,
                             const u32 full_range = 0) {
-  const rhi::PipelineHandle pipeline = device.create_graphics_pipeline({
+  const rhi::PipelineHandle pipeline = nxe::test::compile_pipeline(device, {
       .name = "video",
       .vertex = {.shader = shader, .entry_point = "vs_main"},
       .fragment = {.shader = shader, .entry_point = "fs_main"},
