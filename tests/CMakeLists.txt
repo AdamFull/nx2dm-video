@@ -68,3 +68,7 @@ target_link_libraries(nx_video_scripting_tests
         PRIVATE nx::test nx::foundation nx::engine nx::glm nx::compile_options)
 set_target_properties(nx_video_scripting_tests PROPERTIES FOLDER "tests")
 nxtest_discover_tests(nx_video_scripting_tests LABELS video)
+
+target_compile_definitions(nx_video_scripting_tests PRIVATE
+        NX_MODULE_SERVICES_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/../script-services.json")
+target_link_libraries(nx_video_scripting_tests PRIVATE nx::script_luau)
