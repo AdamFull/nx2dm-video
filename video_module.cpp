@@ -179,6 +179,12 @@ public:
       return false;
     }
     ctx.schedule().add(nxe::sys::Stage::Present, PRESENT_SYSTEM);
+    // The mixer is not a component: a declared system driving it names the
+    // same resource, so two never run side by side.
+    ctx.schedule()
+        .declare<VideoPlayer, const nxe::scene::Camera2D,
+                 const nxe::scene::WorldTransform2D>(PRESENT_SYSTEM);
+    ctx.schedule().declare_exclusive(PRESENT_SYSTEM, "audio.mixer");
 
     const void *const pass_owner = ctx.passes().owner_of(DRAW_PASS);
     if (pass_owner != nullptr && pass_owner != this) {
