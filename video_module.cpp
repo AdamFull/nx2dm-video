@@ -9,6 +9,7 @@
 
 #include "app/engine.h"
 #include "app/module_system/module.h"
+#include "app/rendering/gpu_pipelines.h"
 #include "audio/mixer.h"
 #include "audio/stream.h"
 #include "scene/components.h"
@@ -201,7 +202,8 @@ public:
                                                  nxe::RenderContext &context) {
                           record(ctx, graph, context);
                         }),
-                        nxe::PassScope::Node);
+                        nxe::PassTraits{.scope = nxe::PassScope::Node,
+                                        .needs = nxe::PassNeed::View});
 
     static constexpr nx::string_view MINE[] = {DRAW_PASS};
     const nx::string_view slot =
@@ -233,10 +235,9 @@ public:
         m_decoders.pop_back();
       }
     m_sources.clear();
-    if (m_pipeline_request.valid())
-      (void)ctx.release_pipeline_load(m_pipeline_request);
-    m_pipeline_request = {};
-    m_pipeline_format = nxe::rhi::Format::Unknown;
+    m_pipelines.release([&ctx](const nxe::PipelineLoadRequest request) {
+      (void)ctx.release_pipeline_load(request);
+    });
     m_sampler = 0;
     m_can_draw = false;
     m_attached = false;
@@ -252,10 +253,9 @@ public:
     ++m_reload_epoch;
     if (!ctx.shader_reloaded(SHADER))
       return;
-    if (m_pipeline_request.valid())
-      (void)ctx.release_pipeline_load(m_pipeline_request);
-    m_pipeline_request = {};
-    m_pipeline_format = nxe::rhi::Format::Unknown;
+    m_pipelines.release([&ctx](const nxe::PipelineLoadRequest request) {
+      (void)ctx.release_pipeline_load(request);
+    });
   }
 
 private:
@@ -499,27 +499,18 @@ private:
 
     reap_sources();
 
-    const nxe::rhi::Format format =
-        ctx.config().scene_format == nxe::rhi::Format::Unknown
-            ? device.swapchain_format()
-            : ctx.config().scene_format;
-    if (format != m_pipeline_format) {
-      if (m_pipeline_request.valid())
-        (void)ctx.release_pipeline_load(m_pipeline_request);
-      m_pipeline_request = {};
-      m_pipeline_format = format;
-    }
-    if (!m_pipeline_request.valid()) {
-      nxe::rhi::GraphicsPipelineDesc desc;
-      desc.name = "video";
-      desc.vertex.entry_point = "vs_main";
-      desc.fragment.entry_point = "fs_main";
-      desc.color_formats[0] = format;
-      desc.color_count = 1;
-      m_pipeline_request = ctx.load_graphics_pipeline_async(SHADER, desc);
-    }
-    m_renderer.draw(device, graph, context.target(nxe::TARGET_SCENE_COLOR),
-                    ctx.loaded_pipeline(m_pipeline_request),
+    const nxe::rg::TextureId target = context.target(nxe::TARGET_SCENE_COLOR);
+    const nxe::PipelineLoadRequest request = m_pipelines.request(
+        graph.format(target), 1u, [&ctx](const nxe::rhi::Format color, u32) {
+          nxe::rhi::GraphicsPipelineDesc desc;
+          desc.name = "video";
+          desc.vertex.entry_point = "vs_main";
+          desc.fragment.entry_point = "fs_main";
+          desc.color_formats[0] = color;
+          desc.color_count = 1;
+          return ctx.load_graphics_pipeline_async(SHADER, desc);
+        });
+    m_renderer.draw(device, graph, target, ctx.loaded_pipeline(request),
                     std::span<const VideoDraw>(draws.data(), draws.size()));
   }
 
@@ -625,8 +616,8 @@ private:
   }
 
   VideoRenderer m_renderer;
-  nxe::PipelineLoadRequest m_pipeline_request;
-  nxe::rhi::Format m_pipeline_format = nxe::rhi::Format::Unknown;
+  /// For each format a clip has drawn into.
+  nxe::FormatPipelines m_pipelines;
   nx::vector<nx::unique_ptr<Decoder>> m_decoders;
   nx::vector<nx::unique_ptr<Decoder>> m_dying;
   nx::vector<DyingStream> m_dying_streams;
