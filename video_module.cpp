@@ -194,11 +194,14 @@ public:
       return false;
     }
 
+    // A clip decodes and uploads only when its time moves on, so a second
+    // node drawing it in the same frame draws the same picture.
     ctx.passes().define(DRAW_PASS,
                         nxe::PassFn([this, &ctx](nxe::rg::RenderGraph &graph,
                                                  nxe::RenderContext &context) {
                           record(ctx, graph, context);
-                        }));
+                        }),
+                        nxe::PassScope::Node);
 
     static constexpr nx::string_view MINE[] = {DRAW_PASS};
     const nx::string_view slot =
