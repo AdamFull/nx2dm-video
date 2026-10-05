@@ -3,8 +3,8 @@
 
 #include "core/foundation/platform/filesystem.h"
 #include "rendering/pipeline_test_utils.h"
-#include "rendering/render2d/render_interop.h"
 #include "rendering/rhi/rhi.h"
+#include "rendering/rhi/shaders/nx_interop.h"
 
 #include <cstring>
 #include <vector>
