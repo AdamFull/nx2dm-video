@@ -1,21 +1,10 @@
 
 import nx_core;
 
-// Vectors first, then scalars: that order is 8-aligned identically under the
-// shader's std430 and the C++ glm mirror, so neither side needs padding to guess.
-struct VideoPush {
-    float4 rect;
-    float2 uv_scale;
-    float2 luma_weights;
-
-    NxTexture2D<float4> luma;
-    NxTexture2D<float4> chroma;
-    uint full_range;
-    uint _pad0;
-};
+#include "video/video_interop.h"
 
 [[vk::push_constant]]
-VideoPush pc;
+GpuVideoPush pc;
 
 float3 ycbcr_to_rgb(float y, float cb, float cr) {
     const float kr = pc.luma_weights.x;

@@ -26,7 +26,7 @@ void VideoRenderer::draw(rhi::Device &device, rg::RenderGraph &graph,
                         rhi::CommandContext &cmd, const rg::Resources &) {
         cmd.bind_pipeline(pipeline);
         for (const VideoDraw &d : local) {
-          VideoPush push;
+          GpuVideoPush push;
           push.rect = d.rect;
           push.uv_scale = d.uv_scale;
           push.luma_weights = luma_coeffs(d.colour.matrix);

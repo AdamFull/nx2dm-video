@@ -5,6 +5,7 @@
 #include "rendering/pipeline_test_utils.h"
 #include "rendering/rhi/rhi.h"
 #include "rendering/rhi/shaders/nx_interop.h"
+#include "video/video_interop.h"
 
 #include <cstring>
 #include <vector>
@@ -14,16 +15,6 @@ namespace {
 namespace rhi = nxe::rhi;
 
 constexpr u32 TARGET = 8;
-
-struct VideoPush {
-  float rect[4] = {-1.f, -1.f, 1.f, 1.f};
-  float uv_scale[2] = {1.f, 1.f};
-  float luma_weights[2] = {0.2126f, 0.0722f};
-  NxTexture2D<float4> luma{};
-  NxTexture2D<float4> chroma{};
-  u32 full_range = 0;
-  u32 _pad0 = 0;
-};
 
 struct TestDevice {
   rhi::Device device;
@@ -122,7 +113,7 @@ struct Rendered {
   if (!pipeline.valid())
     return {};
 
-  VideoPush push;
+  GpuVideoPush push;
   const u32 sampler_index = device.sampler_index(sampler);
   push.luma = NxTexture2D<float4>::from_indices(device.texture_index(luma),
                                                 sampler_index);
