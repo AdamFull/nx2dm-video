@@ -6,6 +6,7 @@
 #include "rendering/rhi/bindless.h"
 #include "rendering/rhi/descs.h"
 #include "rendering/rhi/device.h"
+#include "rendering/rhi/shaders/nx_texture.hpp"
 
 #include <glm/vec2.hpp>
 #include <glm/vec4.hpp>

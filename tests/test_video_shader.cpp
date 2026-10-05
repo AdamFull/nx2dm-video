@@ -124,10 +124,10 @@ struct Rendered {
 
   VideoPush push;
   const u32 sampler_index = device.sampler_index(sampler);
-  push.luma = nx_texture_2d<float4>(
-      pack_texture(device.texture_index(luma), sampler_index));
-  push.chroma = nx_texture_2d<float4>(
-      pack_texture(device.texture_index(chroma), sampler_index));
+  push.luma = NxTexture2D<float4>::from_indices(device.texture_index(luma),
+                                                sampler_index);
+  push.chroma = NxTexture2D<float4>::from_indices(device.texture_index(chroma),
+                                                  sampler_index);
   push.luma_weights[0] = kr;
   push.luma_weights[1] = kb;
   push.full_range = full_range;
