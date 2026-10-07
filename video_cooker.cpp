@@ -15,7 +15,7 @@ namespace fs = nx::fs;
 
 inline constexpr nx::asset_contract::Format VIDEO_FORMATS[] = {
     {".nxvid", ".nxvid.nxb", nxm::video::CLIP_FORMAT},
-    {".webm", ".webm.nxb", nxm::video::MEDIA_FORMAT},
+    {".webm", nxm::video::MEDIA_SUFFIX, nxm::video::MEDIA_FORMAT},
 };
 
 [[nodiscard]] bool write(const CookContext &context,

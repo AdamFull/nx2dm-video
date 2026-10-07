@@ -2,6 +2,8 @@
 
 #include "video/video_webm.h"
 
+#include "core/foundation/serialization/asset_contract.h"
+
 #include <utility>
 
 namespace nxm::video {
@@ -142,6 +144,8 @@ bool decode_video_media(nx::blob<u8> container, EncodedVideo &out) noexcept {
 }
 
 nx::string cooked_video_path(const nx::string_view source) {
+  if (source.ends_with(".webm"))
+    return nx::asset_contract::cooked_path(source, MEDIA_SUFFIX);
   nx::string out(source);
   out += ".nxb";
   return out;

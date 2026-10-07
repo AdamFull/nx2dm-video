@@ -159,7 +159,8 @@ TEST_CASE(
   const auto media =
       nxm::video::encode_video_media({source.data(), source.size()}, error);
   REQUIRE(media.has_value());
-  files.device->add("/movie.webm.nxb", blob_of({media->data(), media->size()}));
+  files.device->add("/movie.video.nxb",
+                    blob_of({media->data(), media->size()}));
 
   nxm::video::EncodedVideo encoded;
   REQUIRE(nxm::video::read_video_file("/movie.webm", encoded));
@@ -167,7 +168,7 @@ TEST_CASE(
 
   files.device->add("/demo.nxvid.nxb", nx::blob<u8>{});
   CHECK_FALSE(nxm::video::load_video_clip("/demo.nxvid", clip));
-  files.device->add("/movie.webm.nxb", nx::blob<u8>{});
+  files.device->add("/movie.video.nxb", nx::blob<u8>{});
   CHECK_FALSE(nxm::video::read_video_file("/movie.webm", encoded));
 }
 

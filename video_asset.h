@@ -26,6 +26,10 @@ inline constexpr f64 MAX_VIDEO_FRAME_RATE = 240.0;
 
 inline constexpr u32 CLIP_FORMAT = nx::nva::fourcc('N', 'X', 'V', 'D');
 inline constexpr u32 MEDIA_FORMAT = nx::nva::fourcc('N', 'X', 'V', 'M');
+/// What cooked media is named by in place of its source's suffix, as the
+/// engine names cooked textures and audio: `intro.webm` cooks to
+/// `intro.video.nxb`. A clip, authored, keeps `.nxvid.nxb`.
+inline constexpr nx::string_view MEDIA_SUFFIX = ".video.nxb";
 inline constexpr u16 VIDEO_ASSET_VERSION = 1;
 
 struct VideoClip {

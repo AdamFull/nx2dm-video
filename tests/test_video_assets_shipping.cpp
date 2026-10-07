@@ -71,7 +71,8 @@ TEST_CASE("video assets: Shipping accepts both cooked containers") {
   const auto media =
       nxm::video::encode_video_media({source.data(), source.size()}, error);
   REQUIRE(media.has_value());
-  files.device->add("/movie.webm.nxb", blob_of({media->data(), media->size()}));
+  files.device->add("/movie.video.nxb",
+                    blob_of({media->data(), media->size()}));
 
   nxm::video::VideoClip decoded_clip;
   REQUIRE(nxm::video::load_video_clip("/demo.nxvid", decoded_clip));
@@ -93,7 +94,7 @@ TEST_CASE("video assets: Shipping never hides malformed cooked siblings") {
   nx::blob<u8> source = fixture();
   REQUIRE_FALSE(source.empty());
   files.device->add("/movie.webm", std::move(source));
-  files.device->add("/movie.webm.nxb", nx::blob<u8>{});
+  files.device->add("/movie.video.nxb", nx::blob<u8>{});
 
   nxm::video::VideoClip clip;
   CHECK_FALSE(nxm::video::load_video_clip("/demo.nxvid", clip));
