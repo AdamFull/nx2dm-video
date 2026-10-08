@@ -5,8 +5,7 @@
 
 #include "core/foundation/platform/filesystem.h"
 #include "core/foundation/serialization/json_document.h"
-
-#include <cstdio>
+#include "core/foundation/strings/format.h"
 
 namespace assetc {
 namespace {
@@ -34,9 +33,8 @@ inline constexpr nx::asset_contract::Format VIDEO_FORMATS[] = {
   nxm::video::VideoClip clip;
   nx::string error;
   if (!nxm::video::parse_video_clip(normalized->view(), clip, &error)) {
-    std::fprintf(stderr, "assetc: video clip '%.*s' is invalid: %.*s\n",
-                 static_cast<int>(context.source.size()), context.source.data(),
-                 static_cast<int>(error.size()), error.data());
+    context.report(
+        nx::format("video clip '{}' is invalid: {}", context.source, error));
     return false;
   }
   return write(context, nxm::video::encode_video_clip(clip));
@@ -50,9 +48,8 @@ inline constexpr nx::asset_contract::Format VIDEO_FORMATS[] = {
   const auto cooked =
       nxm::video::encode_video_media({encoded->data(), encoded->size()}, error);
   if (!cooked) {
-    std::fprintf(stderr, "assetc: WebM '%.*s' is invalid: %.*s\n",
-                 static_cast<int>(context.source.size()), context.source.data(),
-                 static_cast<int>(error.size()), error.data());
+    context.report(
+        nx::format("WebM '{}' is invalid: {}", context.source, error));
     return false;
   }
   return write(context, cooked.value());
