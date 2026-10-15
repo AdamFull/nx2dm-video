@@ -172,7 +172,7 @@ public:
     if (!ctx.schedule().try_define(
             PRESENT_SYSTEM,
             nxe::sys::SystemFn([this, &ctx](const nxe::sys::Context &c) {
-              present(ctx, nx::cast<f64>(c.dt));
+              present(ctx, c.simulating ? nx::cast<f64>(c.dt) : 0.0);
             }))) {
       nx::logw("video: system '{}' is already owned by another module",
                PRESENT_SYSTEM);
