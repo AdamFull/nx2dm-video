@@ -8,6 +8,8 @@
 #include "video/vulkan/vk_video_client.h"
 #include "video/vulkan/vk_vp9.h"
 
+#include "core/foundation/diagnostics/log.h"
+#include "core/foundation/threading/thread.h"
 #include "core/foundation/vfs/vfs.h"
 
 #include "mkvparser/mkvparser.h"
@@ -16,6 +18,7 @@
 #include "vpx/vpx_decoder.h"
 #include "vpx/vpx_image.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -303,6 +306,84 @@ TEST_CASE("vp9 parse: every frame of the clip parses, header inside the frame") 
         }
     }
   }
+}
+
+namespace {
+
+/// Counts the validation layer's reports of an object used on two threads at
+/// once, which for a VkQueue means submissions were not synchronized.
+class ThreadingErrors final : public nx::log::Sink {
+public:
+  void write(const nx::log::Record &r) override {
+    const nx::string_view message(r.message, r.length);
+    if (message.find("THREADING") != nx::string_view::npos ||
+        message.find("simultaneously used") != nx::string_view::npos)
+      m_count.fetch_add(1, std::memory_order_relaxed);
+  }
+  [[nodiscard]] u32 count() const noexcept {
+    return m_count.load(std::memory_order_relaxed);
+  }
+
+private:
+  std::atomic<u32> m_count{0};
+};
+
+} // namespace
+
+TEST_CASE("vp9 planes: showing frames while another thread submits frames "
+          "never uses the graphics queue on both at once") {
+  TestDevice fixture;
+  if (!fixture.ready)
+    SKIP("no usable RHI device");
+  if (!fixture.device.native_queue(nxm::video::video_decode_client()).valid())
+    SKIP("no hardware video-decode queue");
+
+  std::vector<u8> backing;
+  const std::vector<RawFrame> frames =
+      read_frames(NX_VIDEO_FIXTURE_DIR "/test.webm", backing, 30);
+  REQUIRE(!frames.empty());
+  REQUIRE(frames[0].key);
+
+  nxm::video::VideoDecoder decoder;
+  REQUIRE(decoder.init(fixture.device, nxm::video::VideoCodec::VP9, 320, 240));
+
+  ThreadingErrors *const errors = nx::allocate<ThreadingErrors>();
+  nx::log::add_sink(errors);
+  std::atomic<bool> stop{false};
+  std::atomic<u32> submitted{0};
+  u32 shown = 0;
+  {
+    // The render job's part: frames submitted to the same queue.
+    nx::thread frames_loop([&] {
+      while (!stop.load(std::memory_order_acquire)) {
+        rhi::CommandContext cmd;
+        if (!fixture.device.begin_headless_frame(cmd) ||
+            !fixture.device.end_headless_frame())
+          break;
+        submitted.fetch_add(1, std::memory_order_relaxed);
+      }
+    });
+    for (u32 pass = 0; pass < 8; ++pass) {
+      decoder.reset_stream();
+      for (const RawFrame &frame : frames) {
+        bool visible = false;
+        u32 width = 0;
+        u32 height = 0;
+        if (decoder.decode_frame(frame.bytes.data(),
+                                 nx::cast<u32>(frame.bytes.size()), visible,
+                                 width, height) &&
+            visible && decoder.show_last())
+          ++shown;
+      }
+    }
+    stop.store(true, std::memory_order_release);
+  }
+  nx::log::flush();
+  const u32 counted = errors->count();
+  nx::log::remove_sink(errors);
+  CHECK(shown > 0u);
+  CHECK(submitted.load() > 0u);
+  CHECK(counted == 0u);
 }
 
 TEST_CASE("vp9 planes: the resolved luma and chroma match libvpx") {

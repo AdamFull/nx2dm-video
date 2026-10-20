@@ -1125,8 +1125,13 @@ bool VideoDecoder::show_last() {
   VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
   submit.commandBufferCount = 1;
   submit.pCommandBuffers = &m_gfx_cmd;
-  NX_VK_DEVICE_TRY(*m_device, vkQueueSubmit(m_device->graphics_queue(), 1,
-                                            &submit, m_gfx_fence));
+  {
+    // The frame submits to this queue on the render job.
+    const nx::scoped_lock<nx::mutex> held(
+        m_device->queue_lock(QueueType::Graphics));
+    NX_VK_DEVICE_TRY(*m_device, vkQueueSubmit(m_device->graphics_queue(), 1,
+                                              &submit, m_gfx_fence));
+  }
   NX_VK_DEVICE_TRY(*m_device,
                    vkWaitForFences(dev, 1, &m_gfx_fence, VK_TRUE, ~0ull));
 
