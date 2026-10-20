@@ -30,6 +30,8 @@
 #include <span>
 #include <utility>
 
+namespace gfx = nx::gfx;
+
 namespace nxm::video {
 namespace {
 
@@ -153,7 +155,7 @@ public:
   }
 
 #if defined(NX_RHI_VULKAN)
-  [[nodiscard]] nxe::rhi::NativeDeviceClient *native_device_client() override {
+  [[nodiscard]] gfx::native_device_client *native_device_client() override {
     return &video_decode_client();
   }
 #endif
@@ -456,7 +458,7 @@ private:
       return;
     }
 
-    nxe::rhi::Device &device = ctx.device();
+    gfx::device &device = ctx.device();
 
     const f32 aspect = context.extent.height != 0
                            ? nx::cast<f32>(context.extent.width) /
@@ -510,8 +512,8 @@ private:
 
     const nxe::rg::TextureId target = context.target(nxe::TARGET_SCENE_COLOR);
     const nxe::PipelineLoadRequest request = m_pipelines.request(
-        graph.format(target), 1u, [&ctx](const nxe::rhi::Format color, u32) {
-          nxe::rhi::GraphicsPipelineDesc desc;
+        graph.format(target), 1u, [&ctx](const gfx::format color, u32) {
+          gfx::graphics_pipeline_desc desc;
           desc.name = "video";
           desc.vertex.entry_point = "vs_main";
           desc.fragment.entry_point = "fs_main";

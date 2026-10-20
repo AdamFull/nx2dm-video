@@ -15,7 +15,7 @@ public:
   HwVideoSource(const HwVideoSource &) = delete;
   HwVideoSource &operator=(const HwVideoSource &) = delete;
 
-  [[nodiscard]] bool open(nxe::rhi::Device &device,
+  [[nodiscard]] bool open(nx::gfx::device &device,
                           nx::string_view path) override;
   [[nodiscard]] bool valid() const noexcept override;
   [[nodiscard]] u32 width() const noexcept override;

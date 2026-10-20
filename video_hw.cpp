@@ -15,10 +15,10 @@ namespace nxm::video {
 
 #include "video/video_demux.h"
 
+namespace gfx = nx::gfx;
+
 namespace nxm::video {
 namespace {
-
-namespace rhi = nxe::rhi;
 
 }
 
@@ -82,14 +82,14 @@ struct HwVideoSource::Impl {
   }
 };
 
-bool hw_decode_available(rhi::Device &device) {
-  return device.native_queue(video_decode_client()).valid();
+bool hw_decode_available(gfx::device &device) {
+  return gfx::native(device, video_decode_client()).valid();
 }
 
 HwVideoSource::HwVideoSource() : m(std::make_unique<Impl>()) {}
 HwVideoSource::~HwVideoSource() = default;
 
-bool HwVideoSource::open(rhi::Device &device, const nx::string_view path) {
+bool HwVideoSource::open(gfx::device &device, const nx::string_view path) {
   if (!m->demux.open(path, "V_VP9")) {
     nx::logw("video: hw demux failed for '{}'", path);
     return false;
@@ -173,7 +173,7 @@ GpuFrame HwVideoSource::frame_at(const f64 target_seconds, const bool looping) {
     m->frame.luma = m->decoder.luma_texture();
     m->frame.chroma = m->decoder.chroma_texture();
     m->frame.colour = m->demux.colour();
-    const rhi::Extent2D coded = m->decoder.coded_extent();
+    const gfx::extent2d coded = m->decoder.coded_extent();
     m->frame.uv_scale = {
         coded.width != 0 ? nx::cast<f32>(shown_w) / coded.width : 1.f,
         coded.height != 0 ? nx::cast<f32>(shown_h) / coded.height : 1.f};
@@ -183,12 +183,12 @@ GpuFrame HwVideoSource::frame_at(const f64 target_seconds, const bool looping) {
 
 #else
 
-bool hw_decode_available(nxe::rhi::Device &) { return false; }
+bool hw_decode_available(gfx::device &) { return false; }
 
 struct HwVideoSource::Impl {};
 HwVideoSource::HwVideoSource() = default;
 HwVideoSource::~HwVideoSource() = default;
-bool HwVideoSource::open(nxe::rhi::Device &, nx::string_view) { return false; }
+bool HwVideoSource::open(gfx::device &, nx::string_view) { return false; }
 bool HwVideoSource::valid() const noexcept { return false; }
 u32 HwVideoSource::width() const noexcept { return 0; }
 u32 HwVideoSource::height() const noexcept { return 0; }

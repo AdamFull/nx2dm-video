@@ -4,11 +4,13 @@
 #include "video/video_hw.h"
 #include "video/video_mediacodec.h"
 
-#include "rendering/rhi/descs.h"
+#include "nx/gfx/gfx.h"
 
 #include <cmath>
 #include <memory>
 #include <span>
+
+namespace gfx = nx::gfx;
 
 namespace nxm::video {
 namespace {
@@ -21,7 +23,7 @@ class CpuVideoSource final : public GpuVideoSource {
 public:
   ~CpuVideoSource() override { destroy_textures(); }
 
-  [[nodiscard]] bool open(nxe::rhi::Device &device,
+  [[nodiscard]] bool open(gfx::device &device,
                           const nx::string_view path) override {
     m_device = &device;
     SourcePtr source;
@@ -105,10 +107,10 @@ private:
         m_luma.valid())
       return true;
     destroy_textures();
-    m_luma = make_texture(frame.width, frame.height, nxe::rhi::Format::R8_UNORM,
+    m_luma = make_texture(frame.width, frame.height, gfx::format::R8_UNORM,
                           "video.cpu.luma");
     m_chroma = make_texture(frame.chroma_width(), frame.chroma_height(),
-                            nxe::rhi::Format::RG8_UNORM, "video.cpu.chroma");
+                            gfx::format::RG8_UNORM, "video.cpu.chroma");
     if (!m_luma.valid() || !m_chroma.valid()) {
       destroy_textures();
       return false;
@@ -118,45 +120,44 @@ private:
     return true;
   }
 
-  [[nodiscard]] nxe::rhi::TextureHandle
-  make_texture(const u32 width, const u32 height, const nxe::rhi::Format format,
+  [[nodiscard]] gfx::texture_handle
+  make_texture(const u32 width, const u32 height, const gfx::format format,
                const nx::string_view name) const {
-    nxe::rhi::TextureDesc desc{};
+    gfx::texture_desc desc{};
     desc.name = name;
     desc.format = format;
     desc.width = nx::max(width, 1u);
     desc.height = nx::max(height, 1u);
-    desc.usage =
-        nxe::rhi::TextureUsage::Sampled | nxe::rhi::TextureUsage::CopyDst;
-    return m_device->create_texture(desc);
+    desc.usage = gfx::texture_usage::Sampled | gfx::texture_usage::CopyDst;
+    return gfx::create_texture(*m_device, desc);
   }
 
-  [[nodiscard]] bool upload_plane(const nxe::rhi::TextureHandle tex,
+  [[nodiscard]] bool upload_plane(const gfx::texture_handle tex,
                                   const u8 *const data, const usize size,
                                   const u32 width, const u32 height,
                                   const u32 row_pitch) const {
     if (data == nullptr || size == 0 || !tex.valid())
       return false;
-    nxe::rhi::ImageSubresource sub{};
+    gfx::image_subresource sub{};
     sub.offset = 0;
     sub.size = nx::cast<u64>(size);
     sub.width = width;
     sub.height = height;
     sub.depth = 1;
     sub.row_pitch = row_pitch;
-    const nxe::rhi::ImageSubresource layout[1] = {sub};
-    return m_device->uploader()
-        .upload_texture(tex, std::span<const u8>(data, size),
-                        std::span<const nxe::rhi::ImageSubresource>(layout, 1))
+    const gfx::image_subresource layout[1] = {sub};
+    return gfx::upload_texture(
+               *m_device, tex, std::span<const u8>(data, size),
+               std::span<const gfx::image_subresource>(layout, 1))
         .ok();
   }
 
   void destroy_textures() noexcept {
     if (m_device != nullptr) {
       if (m_luma.valid())
-        m_device->destroy_texture(m_luma);
+        gfx::destroy_texture(*m_device, m_luma);
       if (m_chroma.valid())
-        m_device->destroy_texture(m_chroma);
+        gfx::destroy_texture(*m_device, m_chroma);
     }
     m_luma = {};
     m_chroma = {};
@@ -166,10 +167,10 @@ private:
     m_uploaded_pts = -1.0;
   }
 
-  nxe::rhi::Device *m_device = nullptr;
+  gfx::device *m_device = nullptr;
   PacedPlayback m_playback;
-  nxe::rhi::TextureHandle m_luma;
-  nxe::rhi::TextureHandle m_chroma;
+  gfx::texture_handle m_luma;
+  gfx::texture_handle m_chroma;
   nx::vector<u8> m_chroma_scratch;
   GpuFrame m_frame;
   u32 m_width = 0;
@@ -184,7 +185,7 @@ private:
 
 } // namespace
 
-GpuSourcePtr create_video_source(nxe::rhi::Device &device,
+GpuSourcePtr create_video_source(gfx::device &device,
                                  const nx::string_view path) {
   // The hardware block where it can take the clip (VP9 only, for now), the CPU
   // decoder otherwise. A hardware open that fails still falls through to CPU.

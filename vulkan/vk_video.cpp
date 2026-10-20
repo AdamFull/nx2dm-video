@@ -1,8 +1,8 @@
 #if defined(NX_RHI_VULKAN)
 
 #include "video/vulkan/vk_video.h"
-#include "rendering/rhi/vulkan/vk_common.h"
-#include "rendering/rhi/vulkan/vk_device.h"
+#include "nx/gfx/gfx.h"
+#include "nx/gfx/vulkan.h"
 #include "video/vulkan/vk_video_client.h"
 #include "video/vulkan/vk_vp9.h"
 
@@ -11,9 +11,9 @@
 #include <cstring>
 #include <limits>
 
-namespace nxm::video {
+namespace gfx = nx::gfx;
 
-using namespace nxe::rhi;
+namespace nxm::video {
 
 namespace {
 
@@ -75,10 +75,10 @@ u32 find_vp9_decode_family(const VkPhysicalDevice adapter) {
   return NONE;
 }
 
-VideoDecodeCaps query_video_decode_caps(const VulkanDevice &device,
+VideoDecodeCaps query_video_decode_caps(const gfx::device &device,
                                         const VideoCodec codec) {
   VideoDecodeCaps out;
-  const VkPhysicalDevice phys = device.vk_physical_device();
+  const VkPhysicalDevice phys = gfx::vk::physical_device(device);
   if (phys == VK_NULL_HANDLE ||
       vkGetPhysicalDeviceVideoCapabilitiesKHR == nullptr)
     return out;
@@ -186,12 +186,12 @@ namespace {
 }
 
 [[nodiscard]] bool
-create_video_image(const VulkanDevice &owner, const VkPhysicalDevice phys,
+create_video_image(const gfx::device &owner, const VkPhysicalDevice phys,
                    const VkVideoProfileListInfoKHR &profiles,
                    const VkFormat format, const VkExtent2D extent,
                    const VkImageUsageFlags usage, const u32 *const families,
                    const u32 family_count, VideoImage &out) {
-  const VkDevice dev = owner.vk_device();
+  const VkDevice dev = gfx::vk::logical_device(owner);
   VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
   ci.pNext = &profiles;
   ci.imageType = VK_IMAGE_TYPE_2D;
@@ -212,7 +212,7 @@ create_video_image(const VulkanDevice &owner, const VkPhysicalDevice phys,
     ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
   }
   ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  if (NX_VK_DEVICE_CHECK(owner, vkCreateImage(dev, &ci, nullptr, &out.image)) !=
+  if (NX_GFX_VK_CHECK(owner, vkCreateImage(dev, &ci, nullptr, &out.image)) !=
       VK_SUCCESS)
     return false;
 
@@ -224,11 +224,11 @@ create_video_image(const VulkanDevice &owner, const VkPhysicalDevice phys,
   VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
   ai.allocationSize = mr.size;
   ai.memoryTypeIndex = type;
-  if (NX_VK_DEVICE_CHECK(owner, vkAllocateMemory(dev, &ai, nullptr,
-                                                 &out.memory)) != VK_SUCCESS)
+  if (NX_GFX_VK_CHECK(owner, vkAllocateMemory(dev, &ai, nullptr,
+                                              &out.memory)) != VK_SUCCESS)
     return false;
-  if (NX_VK_DEVICE_CHECK(owner, vkBindImageMemory(dev, out.image, out.memory,
-                                                  0)) != VK_SUCCESS)
+  if (NX_GFX_VK_CHECK(owner, vkBindImageMemory(dev, out.image, out.memory,
+                                               0)) != VK_SUCCESS)
     return false;
 
   VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
@@ -236,8 +236,8 @@ create_video_image(const VulkanDevice &owner, const VkPhysicalDevice phys,
   vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
   vi.format = format;
   vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-  return NX_VK_DEVICE_CHECK(owner, vkCreateImageView(dev, &vi, nullptr,
-                                                     &out.view)) == VK_SUCCESS;
+  return NX_GFX_VK_CHECK(owner, vkCreateImageView(dev, &vi, nullptr,
+                                                  &out.view)) == VK_SUCCESS;
 }
 
 void destroy_video_image(const VkDevice dev, VideoImage &image) {
@@ -267,19 +267,19 @@ void destroy_video_image(const VkDevice dev, VideoImage &image) {
   return ~0u;
 }
 
-[[nodiscard]] bool create_host_buffer(const VulkanDevice &owner,
+[[nodiscard]] bool create_host_buffer(const gfx::device &owner,
                                       const VkPhysicalDevice phys,
                                       const u64 size,
                                       const VkBufferUsageFlags usage,
                                       const void *const pNext, VkBuffer &buffer,
                                       VkDeviceMemory &memory, void *&mapped) {
-  const VkDevice dev = owner.vk_device();
+  const VkDevice dev = gfx::vk::logical_device(owner);
   VkBufferCreateInfo ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
   ci.pNext = pNext;
   ci.size = size;
   ci.usage = usage;
   ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-  if (NX_VK_DEVICE_CHECK(owner, vkCreateBuffer(dev, &ci, nullptr, &buffer)) !=
+  if (NX_GFX_VK_CHECK(owner, vkCreateBuffer(dev, &ci, nullptr, &buffer)) !=
       VK_SUCCESS)
     return false;
 
@@ -291,14 +291,14 @@ void destroy_video_image(const VkDevice dev, VideoImage &image) {
   VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
   ai.allocationSize = mr.size;
   ai.memoryTypeIndex = type;
-  if (NX_VK_DEVICE_CHECK(owner, vkAllocateMemory(dev, &ai, nullptr, &memory)) !=
+  if (NX_GFX_VK_CHECK(owner, vkAllocateMemory(dev, &ai, nullptr, &memory)) !=
       VK_SUCCESS)
     return false;
-  if (NX_VK_DEVICE_CHECK(owner, vkBindBufferMemory(dev, buffer, memory, 0)) !=
+  if (NX_GFX_VK_CHECK(owner, vkBindBufferMemory(dev, buffer, memory, 0)) !=
       VK_SUCCESS)
     return false;
-  return NX_VK_DEVICE_CHECK(owner, vkMapMemory(dev, memory, 0, VK_WHOLE_SIZE, 0,
-                                               &mapped)) == VK_SUCCESS;
+  return NX_GFX_VK_CHECK(owner, vkMapMemory(dev, memory, 0, VK_WHOLE_SIZE, 0,
+                                            &mapped)) == VK_SUCCESS;
 }
 
 } // namespace
@@ -307,14 +307,14 @@ VideoDecoder::~VideoDecoder() { shutdown(); }
 
 void VideoDecoder::shutdown() noexcept {
   if (m_device != nullptr) {
-    const VkDevice dev = m_device->vk_device();
-    if (m_device->device_status() == GpuDeviceStatus::Ready)
-      NX_VK_DEVICE_CHECK(*m_device, vkDeviceWaitIdle(dev));
+    const VkDevice dev = gfx::vk::logical_device(*m_device);
+    if (gfx::device_status(*m_device) == gfx::gpu_device_status::Ready)
+      NX_GFX_VK_CHECK(*m_device, vkDeviceWaitIdle(dev));
 
     if (m_y.valid())
-      m_device->destroy_texture(m_y);
+      gfx::destroy_texture(*m_device, m_y);
     if (m_cbcr.valid())
-      m_device->destroy_texture(m_cbcr);
+      gfx::destroy_texture(*m_device, m_cbcr);
     destroy_video_image(dev, m_sampleable);
     if (m_gfx_fence != VK_NULL_HANDLE)
       vkDestroyFence(dev, m_gfx_fence, nullptr);
@@ -374,18 +374,18 @@ void VideoDecoder::shutdown() noexcept {
   m_max_dpb_slots = 0;
 }
 
-bool VideoDecoder::init(VulkanDevice &device, const VideoCodec codec,
+bool VideoDecoder::init(gfx::device &device, const VideoCodec codec,
                         const u32 width, const u32 height) {
   shutdown();
-  const NativeQueue video = device.native_queue(video_decode_client());
+  const gfx::native_queue video = gfx::native(device, video_decode_client());
   if (!video.valid() || codec != VideoCodec::VP9)
     return false;
 
   m_device = &device;
   m_video_queue = static_cast<VkQueue>(video.queue);
   m_video_family = video.family;
-  const VkPhysicalDevice phys = device.vk_physical_device();
-  const VkDevice dev = device.vk_device();
+  const VkPhysicalDevice phys = gfx::vk::physical_device(device);
+  const VkDevice dev = gfx::vk::logical_device(device);
 
   VkVideoDecodeVP9ProfileInfoKHR vp9{
       VK_STRUCTURE_TYPE_VIDEO_DECODE_VP9_PROFILE_INFO_KHR};
@@ -484,7 +484,7 @@ bool VideoDecoder::init(VulkanDevice &device, const VideoCodec codec,
   create.maxDpbSlots = m_max_dpb_slots;
   create.maxActiveReferencePictures = 3;
   create.pStdHeaderVersion = &caps.stdHeaderVersion;
-  if (const VkResult r = NX_VK_DEVICE_CHECK(
+  if (const VkResult r = NX_GFX_VK_CHECK(
           device, vkCreateVideoSessionKHR(dev, &create, nullptr, &m_session));
       r != VK_SUCCESS) {
     nx::logw(nx::log::rhi, "video: vkCreateVideoSessionKHR failed ({})",
@@ -495,9 +495,9 @@ bool VideoDecoder::init(VulkanDevice &device, const VideoCodec codec,
   }
 
   u32 requirement_count = 0;
-  if (NX_VK_DEVICE_CHECK(device, vkGetVideoSessionMemoryRequirementsKHR(
-                                     dev, m_session, &requirement_count,
-                                     nullptr)) != VK_SUCCESS) {
+  if (NX_GFX_VK_CHECK(device, vkGetVideoSessionMemoryRequirementsKHR(
+                                  dev, m_session, &requirement_count,
+                                  nullptr)) != VK_SUCCESS) {
     shutdown();
     return false;
   }
@@ -505,9 +505,9 @@ bool VideoDecoder::init(VulkanDevice &device, const VideoCodec codec,
       requirement_count);
   for (VkVideoSessionMemoryRequirementsKHR &r : requirements)
     r.sType = VK_STRUCTURE_TYPE_VIDEO_SESSION_MEMORY_REQUIREMENTS_KHR;
-  if (NX_VK_DEVICE_CHECK(device, vkGetVideoSessionMemoryRequirementsKHR(
-                                     dev, m_session, &requirement_count,
-                                     requirements.data())) != VK_SUCCESS) {
+  if (NX_GFX_VK_CHECK(device, vkGetVideoSessionMemoryRequirementsKHR(
+                                  dev, m_session, &requirement_count,
+                                  requirements.data())) != VK_SUCCESS) {
     shutdown();
     return false;
   }
@@ -525,7 +525,7 @@ bool VideoDecoder::init(VulkanDevice &device, const VideoCodec codec,
     allocate.allocationSize = mr.size;
     allocate.memoryTypeIndex = type;
     VkDeviceMemory memory = VK_NULL_HANDLE;
-    if (const VkResult r = NX_VK_DEVICE_CHECK(
+    if (const VkResult r = NX_GFX_VK_CHECK(
             device, vkAllocateMemory(dev, &allocate, nullptr, &memory));
         r != VK_SUCCESS) {
       nx::logw(nx::log::rhi, "video: session memory alloc failed ({})",
@@ -541,7 +541,7 @@ bool VideoDecoder::init(VulkanDevice &device, const VideoCodec codec,
     binds[i].memoryOffset = 0;
     binds[i].memorySize = mr.size;
   }
-  if (const VkResult r = NX_VK_DEVICE_CHECK(
+  if (const VkResult r = NX_GFX_VK_CHECK(
           device, vkBindVideoSessionMemoryKHR(dev, m_session, requirement_count,
                                               binds.data()));
       r != VK_SUCCESS) {
@@ -551,7 +551,7 @@ bool VideoDecoder::init(VulkanDevice &device, const VideoCodec codec,
     return false;
   }
 
-  const u32 families[2] = {m_video_family, device.graphics_family()};
+  const u32 families[2] = {m_video_family, gfx::vk::graphics_family(device)};
   const VkImageUsageFlags dpb_usage =
       (coincide ? (VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR |
                    VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR)
@@ -589,14 +589,14 @@ bool VideoDecoder::init(VulkanDevice &device, const VideoCodec codec,
 }
 
 bool VideoDecoder::create_command_resources() {
-  const VkDevice dev = m_device->vk_device();
+  const VkDevice dev = gfx::vk::logical_device(*m_device);
   const u32 video_family = m_video_family;
 
   u32 count = 0;
-  vkGetPhysicalDeviceQueueFamilyProperties(m_device->vk_physical_device(),
+  vkGetPhysicalDeviceQueueFamilyProperties(gfx::vk::physical_device(*m_device),
                                            &count, nullptr);
   nx::small_vector<VkQueueFamilyProperties, 8> props(count);
-  vkGetPhysicalDeviceQueueFamilyProperties(m_device->vk_physical_device(),
+  vkGetPhysicalDeviceQueueFamilyProperties(gfx::vk::physical_device(*m_device),
                                            &count, props.data());
   m_video_supports_transfer =
       video_family < count &&
@@ -605,8 +605,8 @@ bool VideoDecoder::create_command_resources() {
   VkCommandPoolCreateInfo pool{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
   pool.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
   pool.queueFamilyIndex = video_family;
-  if (NX_VK_DEVICE_CHECK(*m_device, vkCreateCommandPool(dev, &pool, nullptr,
-                                                        &m_pool)) != VK_SUCCESS)
+  if (NX_GFX_VK_CHECK(*m_device, vkCreateCommandPool(dev, &pool, nullptr,
+                                                     &m_pool)) != VK_SUCCESS)
     return false;
 
   VkCommandBufferAllocateInfo alloc{
@@ -614,20 +614,20 @@ bool VideoDecoder::create_command_resources() {
   alloc.commandPool = m_pool;
   alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
   alloc.commandBufferCount = 1;
-  if (NX_VK_DEVICE_CHECK(*m_device, vkAllocateCommandBuffers(
-                                        dev, &alloc, &m_cmd)) != VK_SUCCESS)
+  if (NX_GFX_VK_CHECK(*m_device, vkAllocateCommandBuffers(
+                                     dev, &alloc, &m_cmd)) != VK_SUCCESS)
     return false;
 
   VkFenceCreateInfo fence{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-  return NX_VK_DEVICE_CHECK(*m_device, vkCreateFence(dev, &fence, nullptr,
-                                                     &m_fence)) == VK_SUCCESS;
+  return NX_GFX_VK_CHECK(*m_device, vkCreateFence(dev, &fence, nullptr,
+                                                  &m_fence)) == VK_SUCCESS;
 }
 
 bool VideoDecoder::create_bitstream_buffer(
     const u64 capacity, const VkVideoProfileListInfoKHR &profiles) {
   m_bitstream_capacity = align_up64(capacity, m_bitstream_size_align);
   return create_host_buffer(
-      *m_device, m_device->vk_physical_device(), m_bitstream_capacity,
+      *m_device, gfx::vk::physical_device(*m_device), m_bitstream_capacity,
       VK_BUFFER_USAGE_VIDEO_DECODE_SRC_BIT_KHR, &profiles, m_bitstream,
       m_bitstream_memory, m_bitstream_mapped);
 }
@@ -791,12 +791,12 @@ bool VideoDecoder::decode(const u8 *const frame, const u32 size,
   di.referenceSlotCount = ref_count;
   di.pReferenceSlots = ref_count != 0 ? decode_refs : nullptr;
 
-  const VkDevice dev = m_device->vk_device();
-  NX_VK_DEVICE_TRY(*m_device, vkResetCommandBuffer(m_cmd, 0));
+  const VkDevice dev = gfx::vk::logical_device(*m_device);
+  NX_GFX_VK_TRY(*m_device, vkResetCommandBuffer(m_cmd, 0));
   VkCommandBufferBeginInfo begin_cmd{
       VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
   begin_cmd.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-  NX_VK_DEVICE_TRY(*m_device, vkBeginCommandBuffer(m_cmd, &begin_cmd));
+  NX_GFX_VK_TRY(*m_device, vkBeginCommandBuffer(m_cmd, &begin_cmd));
 
   // Bring every image the decode touches into its decode layout. References are
   // already there from earlier decodes and skip the barrier.
@@ -851,16 +851,14 @@ bool VideoDecoder::decode(const u8 *const frame, const u32 size,
 
   VkVideoEndCodingInfoKHR end{VK_STRUCTURE_TYPE_VIDEO_END_CODING_INFO_KHR};
   vkCmdEndVideoCodingKHR(m_cmd, &end);
-  NX_VK_DEVICE_TRY(*m_device, vkEndCommandBuffer(m_cmd));
+  NX_GFX_VK_TRY(*m_device, vkEndCommandBuffer(m_cmd));
 
-  NX_VK_DEVICE_TRY(*m_device, vkResetFences(dev, 1, &m_fence));
+  NX_GFX_VK_TRY(*m_device, vkResetFences(dev, 1, &m_fence));
   VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
   submit.commandBufferCount = 1;
   submit.pCommandBuffers = &m_cmd;
-  NX_VK_DEVICE_TRY(*m_device,
-                   vkQueueSubmit(m_video_queue, 1, &submit, m_fence));
-  NX_VK_DEVICE_TRY(*m_device,
-                   vkWaitForFences(dev, 1, &m_fence, VK_TRUE, ~0ull));
+  NX_GFX_VK_TRY(*m_device, vkQueueSubmit(m_video_queue, 1, &submit, m_fence));
+  NX_GFX_VK_TRY(*m_device, vkWaitForFences(dev, 1, &m_fence, VK_TRUE, ~0ull));
 
   m_slot_width[setup] = coded_w;
   m_slot_height[setup] = coded_h;
@@ -880,7 +878,7 @@ bool VideoDecoder::decode(const u8 *const frame, const u32 size,
 
 bool VideoDecoder::create_sampleable_image(const u32 *const families,
                                            const u32 family_count) {
-  const VkDevice dev = m_device->vk_device();
+  const VkDevice dev = gfx::vk::logical_device(*m_device);
   VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
   ci.imageType = VK_IMAGE_TYPE_2D;
   ci.format = m_picture_format;
@@ -899,28 +897,27 @@ bool VideoDecoder::create_sampleable_image(const u32 *const families,
     ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
   }
   ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  if (NX_VK_DEVICE_CHECK(
-          *m_device, vkCreateImage(dev, &ci, nullptr, &m_sampleable.image)) !=
+  if (NX_GFX_VK_CHECK(*m_device,
+                      vkCreateImage(dev, &ci, nullptr, &m_sampleable.image)) !=
       VK_SUCCESS)
     return false;
 
   VkMemoryRequirements mr;
   vkGetImageMemoryRequirements(dev, m_sampleable.image, &mr);
-  const u32 type =
-      session_memory_type(m_device->vk_physical_device(), mr.memoryTypeBits);
+  const u32 type = session_memory_type(gfx::vk::physical_device(*m_device),
+                                       mr.memoryTypeBits);
   if (type == ~0u)
     return false;
   VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
   ai.allocationSize = mr.size;
   ai.memoryTypeIndex = type;
-  if (NX_VK_DEVICE_CHECK(*m_device, vkAllocateMemory(dev, &ai, nullptr,
-                                                     &m_sampleable.memory)) !=
+  if (NX_GFX_VK_CHECK(*m_device, vkAllocateMemory(dev, &ai, nullptr,
+                                                  &m_sampleable.memory)) !=
       VK_SUCCESS)
     return false;
-  return NX_VK_DEVICE_CHECK(*m_device,
-                            vkBindImageMemory(dev, m_sampleable.image,
-                                              m_sampleable.memory, 0)) ==
-         VK_SUCCESS;
+  return NX_GFX_VK_CHECK(*m_device, vkBindImageMemory(dev, m_sampleable.image,
+                                                      m_sampleable.memory,
+                                                      0)) == VK_SUCCESS;
 }
 
 bool VideoDecoder::present(const u32 slot) {
@@ -933,12 +930,12 @@ bool VideoDecoder::present(const u32 slot) {
                                     ? VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR
                                     : VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR;
 
-  const VkDevice dev = m_device->vk_device();
-  NX_VK_DEVICE_TRY(*m_device, vkResetCommandBuffer(m_cmd, 0));
+  const VkDevice dev = gfx::vk::logical_device(*m_device);
+  NX_GFX_VK_TRY(*m_device, vkResetCommandBuffer(m_cmd, 0));
   VkCommandBufferBeginInfo begin_cmd{
       VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
   begin_cmd.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-  NX_VK_DEVICE_TRY(*m_device, vkBeginCommandBuffer(m_cmd, &begin_cmd));
+  NX_GFX_VK_TRY(*m_device, vkBeginCommandBuffer(m_cmd, &begin_cmd));
 
   const auto barrier = [&](VideoImage &img, const VkImageLayout to) {
     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -977,27 +974,25 @@ bool VideoDecoder::present(const u32 slot) {
 
   barrier(src, restore);
   barrier(m_sampleable, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-  NX_VK_DEVICE_TRY(*m_device, vkEndCommandBuffer(m_cmd));
+  NX_GFX_VK_TRY(*m_device, vkEndCommandBuffer(m_cmd));
 
-  NX_VK_DEVICE_TRY(*m_device, vkResetFences(dev, 1, &m_fence));
+  NX_GFX_VK_TRY(*m_device, vkResetFences(dev, 1, &m_fence));
   VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
   submit.commandBufferCount = 1;
   submit.pCommandBuffers = &m_cmd;
-  NX_VK_DEVICE_TRY(*m_device,
-                   vkQueueSubmit(m_video_queue, 1, &submit, m_fence));
-  NX_VK_DEVICE_TRY(*m_device,
-                   vkWaitForFences(dev, 1, &m_fence, VK_TRUE, ~0ull));
+  NX_GFX_VK_TRY(*m_device, vkQueueSubmit(m_video_queue, 1, &submit, m_fence));
+  NX_GFX_VK_TRY(*m_device, vkWaitForFences(dev, 1, &m_fence, VK_TRUE, ~0ull));
   return true;
 }
 
 bool VideoDecoder::create_plane_resources() {
-  const VkDevice dev = m_device->vk_device();
+  const VkDevice dev = gfx::vk::logical_device(*m_device);
 
   VkCommandPoolCreateInfo cpc{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
   cpc.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-  cpc.queueFamilyIndex = m_device->graphics_family();
-  if (NX_VK_DEVICE_CHECK(
-          *m_device, vkCreateCommandPool(dev, &cpc, nullptr, &m_gfx_pool)) !=
+  cpc.queueFamilyIndex = gfx::vk::graphics_family(*m_device);
+  if (NX_GFX_VK_CHECK(*m_device,
+                      vkCreateCommandPool(dev, &cpc, nullptr, &m_gfx_pool)) !=
       VK_SUCCESS)
     return false;
   VkCommandBufferAllocateInfo cba{
@@ -1005,31 +1000,31 @@ bool VideoDecoder::create_plane_resources() {
   cba.commandPool = m_gfx_pool;
   cba.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
   cba.commandBufferCount = 1;
-  if (NX_VK_DEVICE_CHECK(*m_device, vkAllocateCommandBuffers(
-                                        dev, &cba, &m_gfx_cmd)) != VK_SUCCESS)
+  if (NX_GFX_VK_CHECK(*m_device, vkAllocateCommandBuffers(
+                                     dev, &cba, &m_gfx_cmd)) != VK_SUCCESS)
     return false;
   VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-  if (NX_VK_DEVICE_CHECK(*m_device, vkCreateFence(dev, &fci, nullptr,
-                                                  &m_gfx_fence)) != VK_SUCCESS)
+  if (NX_GFX_VK_CHECK(*m_device, vkCreateFence(dev, &fci, nullptr,
+                                               &m_gfx_fence)) != VK_SUCCESS)
     return false;
 
-  TextureDesc luma;
+  gfx::texture_desc luma;
   luma.name = "video luma";
-  luma.format = Format::R8_UNORM;
+  luma.format = gfx::format::R8_UNORM;
   luma.width = m_extent.width;
   luma.height = m_extent.height;
-  luma.usage =
-      TextureUsage::Sampled | TextureUsage::CopyDst | TextureUsage::CopySrc;
-  m_y = m_device->create_texture(luma);
+  luma.usage = gfx::texture_usage::Sampled | gfx::texture_usage::CopyDst |
+               gfx::texture_usage::CopySrc;
+  m_y = gfx::create_texture(*m_device, luma);
 
-  TextureDesc chroma;
+  gfx::texture_desc chroma;
   chroma.name = "video chroma";
-  chroma.format = Format::RG8_UNORM;
+  chroma.format = gfx::format::RG8_UNORM;
   chroma.width = m_extent.width / 2;
   chroma.height = m_extent.height / 2;
-  chroma.usage =
-      TextureUsage::Sampled | TextureUsage::CopyDst | TextureUsage::CopySrc;
-  m_cbcr = m_device->create_texture(chroma);
+  chroma.usage = gfx::texture_usage::Sampled | gfx::texture_usage::CopyDst |
+                 gfx::texture_usage::CopySrc;
+  m_cbcr = gfx::create_texture(*m_device, chroma);
 
   return m_y.valid() && m_cbcr.valid();
 }
@@ -1060,18 +1055,17 @@ bool VideoDecoder::show_last() {
   if (!m_have_last || !present(m_last_slot))
     return false;
 
-  const VkImage y = static_cast<VkImage>(m_device->native_texture(m_y).image);
-  const VkImage c =
-      static_cast<VkImage>(m_device->native_texture(m_cbcr).image);
+  const VkImage y = static_cast<VkImage>(gfx::native(*m_device, m_y).image);
+  const VkImage c = static_cast<VkImage>(gfx::native(*m_device, m_cbcr).image);
   if (y == VK_NULL_HANDLE || c == VK_NULL_HANDLE)
     return false;
-  const VkDevice dev = m_device->vk_device();
+  const VkDevice dev = gfx::vk::logical_device(*m_device);
 
-  NX_VK_DEVICE_TRY(*m_device, vkResetCommandBuffer(m_gfx_cmd, 0));
+  NX_GFX_VK_TRY(*m_device, vkResetCommandBuffer(m_gfx_cmd, 0));
   VkCommandBufferBeginInfo begin_cmd{
       VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
   begin_cmd.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-  NX_VK_DEVICE_TRY(*m_device, vkBeginCommandBuffer(m_gfx_cmd, &begin_cmd));
+  NX_GFX_VK_TRY(*m_device, vkBeginCommandBuffer(m_gfx_cmd, &begin_cmd));
 
   const auto barrier = [&](const VkImage image, const VkImageLayout from,
                            const VkImageLayout to) {
@@ -1119,24 +1113,20 @@ bool VideoDecoder::show_last() {
           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   barrier(m_sampleable.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-  NX_VK_DEVICE_TRY(*m_device, vkEndCommandBuffer(m_gfx_cmd));
+  NX_GFX_VK_TRY(*m_device, vkEndCommandBuffer(m_gfx_cmd));
 
-  NX_VK_DEVICE_TRY(*m_device, vkResetFences(dev, 1, &m_gfx_fence));
+  NX_GFX_VK_TRY(*m_device, vkResetFences(dev, 1, &m_gfx_fence));
   VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
   submit.commandBufferCount = 1;
   submit.pCommandBuffers = &m_gfx_cmd;
-  {
-    // The frame submits to this queue on the render job.
-    const nx::scoped_lock<nx::mutex> held(
-        m_device->queue_lock(QueueType::Graphics));
-    NX_VK_DEVICE_TRY(*m_device, vkQueueSubmit(m_device->graphics_queue(), 1,
-                                              &submit, m_gfx_fence));
-  }
-  NX_VK_DEVICE_TRY(*m_device,
-                   vkWaitForFences(dev, 1, &m_gfx_fence, VK_TRUE, ~0ull));
+  NX_GFX_VK_TRY(*m_device,
+                gfx::vk::submit_graphics(*m_device, {&submit, 1}, m_gfx_fence));
+  NX_GFX_VK_TRY(*m_device,
+                vkWaitForFences(dev, 1, &m_gfx_fence, VK_TRUE, ~0ull));
 
-  m_device->set_texture_state(m_y, ResourceState::ShaderReadOnly);
-  m_device->set_texture_state(m_cbcr, ResourceState::ShaderReadOnly);
+  gfx::set_texture_state(*m_device, m_y, gfx::resource_state::ShaderReadOnly);
+  gfx::set_texture_state(*m_device, m_cbcr,
+                         gfx::resource_state::ShaderReadOnly);
   return true;
 }
 

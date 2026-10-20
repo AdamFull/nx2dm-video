@@ -5,15 +5,16 @@
 
 #include <utility>
 
+namespace gfx = nx::gfx;
+
 namespace nxm::video {
 namespace {
-namespace rhi = nxe::rhi;
 namespace rg = nxe::rg;
 } // namespace
 
-void VideoRenderer::draw(rhi::Device &device, rg::RenderGraph &graph,
+void VideoRenderer::draw(gfx::device &device, rg::RenderGraph &graph,
                          const rg::TextureId target,
-                         const rhi::PipelineHandle pipeline,
+                         const gfx::pipeline_handle pipeline,
                          const std::span<const VideoDraw> draws) {
   if (draws.empty() || !pipeline.valid() || !target.valid())
     return;
@@ -23,20 +24,20 @@ void VideoRenderer::draw(rhi::Device &device, rg::RenderGraph &graph,
       "video.draw",
       rg::SetupFn([target](rg::Builder &builder) { builder.color(0, target); }),
       rg::ExecuteFn([pipeline, &device, local = std::move(local)](
-                        rhi::CommandContext &cmd, const rg::Resources &) {
-        cmd.bind_pipeline(pipeline);
+                        gfx::command_list &cmd, const rg::Resources &) {
+        gfx::bind_pipeline(cmd, pipeline);
         for (const VideoDraw &d : local) {
           GpuVideoPush push;
           push.rect = d.rect;
           push.uv_scale = d.uv_scale;
           push.luma_weights = luma_coeffs(d.colour.matrix);
           push.luma = NxTexture2D<float4>::from_indices(
-              device.texture_index(d.luma), d.sampler_index);
+              gfx::texture_index(device, d.luma), d.sampler_index);
           push.chroma = NxTexture2D<float4>::from_indices(
-              device.texture_index(d.chroma), d.sampler_index);
+              gfx::texture_index(device, d.chroma), d.sampler_index);
           push.full_range = d.colour.full_range ? 1u : 0u;
-          cmd.push_constants(&push, sizeof(push));
-          cmd.draw(6);
+          gfx::push_constants(cmd, &push, sizeof(push));
+          gfx::draw(cmd, 6);
         }
       }));
 }

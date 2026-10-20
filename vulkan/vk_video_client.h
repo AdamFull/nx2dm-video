@@ -1,20 +1,20 @@
 #pragma once
 
-#include "rendering/rhi/native.h"
-#include "rendering/rhi/vulkan/vk_common.h"
+#include "nx/gfx/native.h"
+#include "nx/gfx/vulkan.h"
 
 namespace nxm::video {
 
 /// Asks a Vulkan device, before it is made, for hardware VP9 decode: the video
 /// extensions, the VP9 feature and a queue in a decode family of its own. A
 /// device made without it, or that could not grant it, has no video queue.
-class VideoDecodeClient final : public nxe::rhi::NativeDeviceClient {
+class VideoDecodeClient final : public nx::gfx::native_device_client {
 public:
-  void device_extensions(const nxe::rhi::NativeDevice &adapter,
-                         nxe::rhi::NativeNames &out) override;
-  void device_features(const nxe::rhi::NativeDevice &adapter,
+  void device_extensions(const nx::gfx::native_device &adapter,
+                         nx::gfx::native_names &out) override;
+  void device_features(const nx::gfx::native_device &adapter,
                        void *features) override;
-  u32 queue_family(const nxe::rhi::NativeDevice &adapter) override;
+  u32 queue_family(const nx::gfx::native_device &adapter) override;
 
 private:
   /// Chained into the device's features; lives as long as the client.

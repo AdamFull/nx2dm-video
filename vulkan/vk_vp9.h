@@ -1,6 +1,6 @@
 #pragma once
 
-#include "rendering/rhi/vulkan/vk_common.h"
+#include "nx/gfx/vulkan.h"
 
 namespace nxm::video {
 

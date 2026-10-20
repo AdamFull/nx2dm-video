@@ -2,7 +2,7 @@
 
 #include "video/video_source.h"
 
-#include "rendering/rhi/device.h"
+#include "nx/gfx/gfx.h"
 
 #include "core/foundation/strings/utf8_string_view.h"
 
@@ -12,8 +12,8 @@
 namespace nxm::video {
 
 struct GpuFrame {
-  nxe::rhi::TextureHandle luma;
-  nxe::rhi::TextureHandle chroma;
+  nx::gfx::texture_handle luma;
+  nx::gfx::texture_handle chroma;
   glm::vec2 uv_scale{1.f, 1.f};
   ColourInfo colour;
   [[nodiscard]] bool valid() const noexcept {
@@ -25,7 +25,7 @@ class GpuVideoSource {
 public:
   virtual ~GpuVideoSource() = default;
 
-  [[nodiscard]] virtual bool open(nxe::rhi::Device &device,
+  [[nodiscard]] virtual bool open(nx::gfx::device &device,
                                   nx::string_view path) = 0;
   [[nodiscard]] virtual bool valid() const noexcept = 0;
   [[nodiscard]] virtual u32 width() const noexcept = 0;
@@ -43,9 +43,8 @@ public:
 
 using GpuSourcePtr = std::unique_ptr<GpuVideoSource>;
 
-[[nodiscard]] bool hw_decode_available(nxe::rhi::Device &device);
+[[nodiscard]] bool hw_decode_available(nx::gfx::device &device);
 
-[[nodiscard]] GpuSourcePtr create_video_source(nxe::rhi::Device &device,
+[[nodiscard]] GpuSourcePtr create_video_source(nx::gfx::device &device,
                                                nx::string_view path);
-
 }
