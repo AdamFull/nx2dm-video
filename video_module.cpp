@@ -6,6 +6,9 @@
 #include "video/video_pass.h"
 #include "video/video_place.h"
 #include "video/video_scripting.h"
+#if defined(NX_RHI_VULKAN)
+#include "video/vulkan/vk_video_client.h"
+#endif
 
 #include "app/engine.h"
 #include "app/module_system/module.h"
@@ -148,6 +151,12 @@ public:
     out.version = {1, 0, 0};
     return out;
   }
+
+#if defined(NX_RHI_VULKAN)
+  [[nodiscard]] nxe::rhi::NativeDeviceClient *native_device_client() override {
+    return &video_decode_client();
+  }
+#endif
 
   bool on_register(nxe::ModuleContext &ctx) override {
     ctx.scene().registry().register_component<VideoPlayer>({.name = COMPONENT});

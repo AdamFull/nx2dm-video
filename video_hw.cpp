@@ -10,7 +10,8 @@ namespace nxm::video {
 #if defined(NX_RHI_VULKAN)
 }
 
-#include "rendering/rhi/vulkan/vk_video.h"
+#include "video/vulkan/vk_video.h"
+#include "video/vulkan/vk_video_client.h"
 
 #include "video/video_demux.h"
 
@@ -22,7 +23,7 @@ namespace rhi = nxe::rhi;
 }
 
 struct HwVideoSource::Impl {
-  rhi::VideoDecoder decoder;
+  VideoDecoder decoder;
   WebmVideoDemux demux;
   nx::vector<u8> next_bytes;
   f64 next_pts = 0.0;
@@ -82,7 +83,7 @@ struct HwVideoSource::Impl {
 };
 
 bool hw_decode_available(rhi::Device &device) {
-  return device.video_decode_available();
+  return device.native_queue(video_decode_client()).valid();
 }
 
 HwVideoSource::HwVideoSource() : m(std::make_unique<Impl>()) {}
@@ -93,7 +94,7 @@ bool HwVideoSource::open(rhi::Device &device, const nx::string_view path) {
     nx::logw("video: hw demux failed for '{}'", path);
     return false;
   }
-  if (!m->decoder.init(device, rhi::VideoCodec::VP9, m->demux.width(),
+  if (!m->decoder.init(device, VideoCodec::VP9, m->demux.width(),
                        m->demux.height())) {
     nx::logw("video: hw decoder init failed for '{}'", path);
     return false;

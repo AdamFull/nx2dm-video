@@ -4,6 +4,7 @@ add_executable(nx_video_tests
         test_video_decode.cpp
         test_video_assets.cpp
         test_video_vp9.cpp
+        test_video_caps.cpp
         test_video_place.cpp
         ../video_source.cpp
         ../video_decode.cpp
@@ -14,7 +15,15 @@ add_executable(nx_video_tests
         ../video_audio.cpp
         ../video_hw.cpp
         ../video_cpu.cpp
-        ../video_mediacodec.cpp)
+        ../video_mediacodec.cpp
+        ../vulkan/vk_video.cpp
+        ../vulkan/vk_vp9.cpp
+        ../vulkan/vk_video_client.cpp)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set_source_files_properties(../vulkan/vk_video.cpp ../vulkan/vk_vp9.cpp
+            PROPERTIES COMPILE_OPTIONS "-Wno-missing-field-initializers")
+endif ()
 
 target_include_directories(nx_video_tests PRIVATE
         "${NX_ENGINE_ROOT}/engine" "${NX_ENGINE_ROOT}/modules")

@@ -4,8 +4,9 @@
 #include "video/video_hw.h"
 
 #include "rendering/rhi/device.h"
-#include "rendering/rhi/vulkan/vk_video.h"
-#include "rendering/rhi/vulkan/vk_vp9.h"
+#include "video/vulkan/vk_video.h"
+#include "video/vulkan/vk_video_client.h"
+#include "video/vulkan/vk_vp9.h"
 
 #include "core/foundation/vfs/vfs.h"
 
@@ -188,11 +189,14 @@ struct VpxLuma {
 }
 
 struct TestDevice {
+  nxe::rhi::NativeDeviceClient *const clients[1] = {
+      &nxm::video::video_decode_client()};
   nxe::rhi::Device device;
   bool ready = false;
   TestDevice() {
     nxe::rhi::DeviceDesc desc{};
     desc.application_name = "nx video hw decode tests";
+    desc.native_clients = clients;
     ready = device.init(desc);
   }
   ~TestDevice() {
@@ -212,10 +216,10 @@ TEST_CASE("vp9 parse: the keyframe header agrees with libvpx on size and type") 
   REQUIRE(frames.size() >= 2);
   REQUIRE(frames[0].key);
 
-  rhi::Vp9FrameHeader header;
-  REQUIRE(rhi::parse_vp9_frame_header(frames[0].bytes.data(),
-                                      static_cast<u32>(frames[0].bytes.size()),
-                                      nullptr, nullptr, header));
+  nxm::video::Vp9FrameHeader header;
+  REQUIRE(nxm::video::parse_vp9_frame_header(
+      frames[0].bytes.data(), static_cast<u32>(frames[0].bytes.size()), nullptr,
+      nullptr, header));
   CHECK(header.valid);
   CHECK(header.picture.frame_type == STD_VIDEO_VP9_FRAME_TYPE_KEY);
   CHECK(header.picture.profile == STD_VIDEO_VP9_PROFILE_0);
@@ -244,10 +248,10 @@ TEST_CASE("vp9 parse: an inter frame parses as non-key with a whole header") {
       read_frames(NX_VIDEO_FIXTURE_DIR "/test.webm", backing, 6);
   REQUIRE(frames.size() >= 2);
 
-  rhi::Vp9FrameHeader key;
-  REQUIRE(rhi::parse_vp9_frame_header(frames[0].bytes.data(),
-                                      static_cast<u32>(frames[0].bytes.size()),
-                                      nullptr, nullptr, key));
+  nxm::video::Vp9FrameHeader key;
+  REQUIRE(nxm::video::parse_vp9_frame_header(
+      frames[0].bytes.data(), static_cast<u32>(frames[0].bytes.size()), nullptr,
+      nullptr, key));
   u32 ref_w[8];
   u32 ref_h[8];
   for (u32 i = 0; i < 8; ++i) {
@@ -263,10 +267,10 @@ TEST_CASE("vp9 parse: an inter frame parses as non-key with a whole header") {
     }
   REQUIRE(inter != 0);
 
-  rhi::Vp9FrameHeader header;
-  REQUIRE(rhi::parse_vp9_frame_header(
-      frames[inter].bytes.data(),
-      static_cast<u32>(frames[inter].bytes.size()), ref_w, ref_h, header));
+  nxm::video::Vp9FrameHeader header;
+  REQUIRE(nxm::video::parse_vp9_frame_header(
+      frames[inter].bytes.data(), static_cast<u32>(frames[inter].bytes.size()),
+      ref_w, ref_h, header));
   CHECK(header.valid);
   CHECK(header.picture.frame_type == STD_VIDEO_VP9_FRAME_TYPE_NON_KEY);
 
@@ -284,10 +288,10 @@ TEST_CASE("vp9 parse: every frame of the clip parses, header inside the frame") 
   u32 ref_w[8] = {};
   u32 ref_h[8] = {};
   for (const RawFrame &frame : frames) {
-    rhi::Vp9FrameHeader header;
-    REQUIRE(rhi::parse_vp9_frame_header(frame.bytes.data(),
-                                        static_cast<u32>(frame.bytes.size()),
-                                        ref_w, ref_h, header));
+    nxm::video::Vp9FrameHeader header;
+    REQUIRE(nxm::video::parse_vp9_frame_header(
+        frame.bytes.data(), static_cast<u32>(frame.bytes.size()), ref_w, ref_h,
+        header));
     CHECK(header.uncompressed_header_size + header.compressed_header_size <
           frame.bytes.size());
 
@@ -305,7 +309,7 @@ TEST_CASE("vp9 planes: the resolved luma and chroma match libvpx") {
   TestDevice fixture;
   if (!fixture.ready)
     SKIP("no usable RHI device");
-  if (!fixture.device.video_decode_available())
+  if (!fixture.device.native_queue(nxm::video::video_decode_client()).valid())
     SKIP("no hardware video-decode queue");
 
   std::vector<u8> backing;
@@ -314,8 +318,8 @@ TEST_CASE("vp9 planes: the resolved luma and chroma match libvpx") {
   REQUIRE(!frames.empty());
   REQUIRE(frames[0].key);
 
-  nxe::rhi::VideoDecoder decoder;
-  REQUIRE(decoder.init(fixture.device, nxe::rhi::VideoCodec::VP9, 320, 240));
+  nxm::video::VideoDecoder decoder;
+  REQUIRE(decoder.init(fixture.device, nxm::video::VideoCodec::VP9, 320, 240));
 
   bool shown = false;
   u32 w = 0;
@@ -503,12 +507,12 @@ TEST_CASE("vp9 parse: a truncated or empty frame is rejected, not walked off") {
       read_frames(NX_VIDEO_FIXTURE_DIR "/test.webm", backing, 2);
   REQUIRE(!frames.empty());
 
-  rhi::Vp9FrameHeader header;
-  CHECK_FALSE(rhi::parse_vp9_frame_header(nullptr, 0, nullptr, nullptr, header));
+  nxm::video::Vp9FrameHeader header;
   CHECK_FALSE(
-      rhi::parse_vp9_frame_header(frames[0].bytes.data(), 0, nullptr, nullptr,
-                                  header));
+      nxm::video::parse_vp9_frame_header(nullptr, 0, nullptr, nullptr, header));
+  CHECK_FALSE(nxm::video::parse_vp9_frame_header(frames[0].bytes.data(), 0,
+                                                 nullptr, nullptr, header));
 
-  CHECK_FALSE(rhi::parse_vp9_frame_header(frames[0].bytes.data(), 2, nullptr,
-                                          nullptr, header));
+  CHECK_FALSE(nxm::video::parse_vp9_frame_header(frames[0].bytes.data(), 2,
+                                                 nullptr, nullptr, header));
 }

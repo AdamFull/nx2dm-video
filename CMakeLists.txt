@@ -25,8 +25,14 @@ nx_module(video
                 video_demux.cpp video_mediacodec.cpp video_clip.cpp video_asset.cpp
                 video_webm.cpp
                 video_audio.cpp video_scripting.cpp video_hw.cpp video_cpu.cpp
+                vulkan/vk_video.cpp vulkan/vk_vp9.cpp vulkan/vk_video_client.cpp
         DEPENDS nx::vpx nx::webm nx::opus nx::vorbis nx::gav1
         ASSETS assets)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set_source_files_properties(vulkan/vk_video.cpp vulkan/vk_vp9.cpp
+            PROPERTIES COMPILE_OPTIONS "-Wno-missing-field-initializers")
+endif ()
 
 if (ANDROID)
     target_link_libraries(nx_module_video PUBLIC mediandk log)
