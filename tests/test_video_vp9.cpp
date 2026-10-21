@@ -318,7 +318,7 @@ public:
   void write(const nx::log::Record &r) override {
     const nx::string_view message(r.message, r.length);
     if (message.find("VUID") != nx::string_view::npos ||
-        message.find("SYNC-HAZARD") != nx::string_view::npos ||
+        message.find("hazard detected") != nx::string_view::npos ||
         message.find("THREADING") != nx::string_view::npos ||
         message.find("simultaneously used") != nx::string_view::npos)
       m_count.fetch_add(1, std::memory_order_relaxed);
@@ -527,6 +527,8 @@ TEST_CASE("vp9 planes: the resolved luma and chroma match libvpx") {
   REQUIRE(
       decoder.init(fixture.device, nx::gfx::video::video_codec::VP9, 320, 240));
 
+  ValidationErrors *const errors = nx::allocate<ValidationErrors>();
+  nx::log::add_sink(errors);
   bool shown = false;
   u32 w = 0;
   u32 h = 0;
@@ -548,6 +550,10 @@ TEST_CASE("vp9 planes: the resolved luma and chroma match libvpx") {
   REQUIRE(chroma.data != nullptr);
   gfx::wait_upload(fixture.device, luma.ticket);
   gfx::wait_upload(fixture.device, chroma.ticket);
+  nx::log::flush();
+  const u32 counted = errors->count();
+  nx::log::remove_sink(errors);
+  CHECK(counted == 0u);
 
   const VpxLuma ref = vpx_decode_luma(frames, 0);
   REQUIRE(ref.ok);
@@ -622,13 +628,21 @@ TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
   CHECK(src.position() < 1.2);
   CHECK_FALSE(src.finished());
 
+  ValidationErrors *const errors = nx::allocate<ValidationErrors>();
+  nx::log::add_sink(errors);
   const nxm::video::GpuFrame back = src.frame_at(0.0, false);
   REQUIRE(back.valid());
   CHECK(src.position() < 0.2);
+  // Frames are what wait on the copy; a readback after one sees it.
+  REQUIRE(run_frame(fixture.device));
   {
     const gfx::readback_result y = gfx::read_texture(fixture.device, back.luma);
     REQUIRE(y.data != nullptr);
     gfx::wait_upload(fixture.device, y.ticket);
+    nx::log::flush();
+    const u32 counted = errors->count();
+    nx::log::remove_sink(errors);
+    CHECK(counted == 0u);
     const VpxLuma ref = vpx_decode_luma(frames, 0);
     REQUIRE(ref.ok);
     usize mism = 0;
