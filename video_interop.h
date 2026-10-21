@@ -3,7 +3,7 @@
 // What the video draw is handed, shared by C++ and Slang as nx_interop.h
 // describes; video.slang includes it.
 
-#include "rendering/rhi/shaders/nx_interop.h"
+#include "rendering/interop/nx_interop.h"
 
 /// Vectors first, then scalars: that order is 8-aligned alike under std430
 /// and in C++, so neither side needs padding to guess.

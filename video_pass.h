@@ -5,8 +5,8 @@
 
 #include "nx/gfx/bindless.h"
 #include "nx/gfx/gfx.h"
+#include "nx/gfx/shaders/texture.hpp"
 #include "rendering/graph/render_graph.h"
-#include "rendering/rhi/shaders/nx_texture.hpp"
 
 #include <glm/vec2.hpp>
 #include <glm/vec4.hpp>

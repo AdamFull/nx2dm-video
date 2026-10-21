@@ -3,9 +3,9 @@
 
 #include "core/foundation/platform/filesystem.h"
 #include "nx/gfx/gfx.h"
+#include "rendering/interop/nx_interop.h"
 #include "rendering/owned_device.h"
 #include "rendering/pipeline_test_utils.h"
-#include "rendering/rhi/shaders/nx_interop.h"
 #include "video/video_interop.h"
 
 #include <cstring>
