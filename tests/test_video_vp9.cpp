@@ -311,13 +311,15 @@ TEST_CASE("vp9 parse: every frame of the clip parses, header inside the frame") 
 
 namespace {
 
-/// Counts the validation layer's reports of an object used on two threads at
-/// once, which for a VkQueue means submissions were not synchronized.
-class ThreadingErrors final : public nx::log::Sink {
+/// Counts the validation layer's reports: a misused image or layout, a
+/// hazard between queues, or an object used on two threads at once.
+class ValidationErrors final : public nx::log::Sink {
 public:
   void write(const nx::log::Record &r) override {
     const nx::string_view message(r.message, r.length);
-    if (message.find("THREADING") != nx::string_view::npos ||
+    if (message.find("VUID") != nx::string_view::npos ||
+        message.find("SYNC-HAZARD") != nx::string_view::npos ||
+        message.find("THREADING") != nx::string_view::npos ||
         message.find("simultaneously used") != nx::string_view::npos)
       m_count.fetch_add(1, std::memory_order_relaxed);
   }
@@ -332,7 +334,7 @@ private:
 } // namespace
 
 TEST_CASE("vp9 planes: showing frames while another thread submits frames "
-          "never uses the graphics queue on both at once") {
+          "draws no validation report") {
   TestDevice fixture;
   if (!fixture.ready)
     SKIP("no usable RHI device");
@@ -350,7 +352,7 @@ TEST_CASE("vp9 planes: showing frames while another thread submits frames "
   REQUIRE(
       decoder.init(fixture.device, nx::gfx::video::video_codec::VP9, 320, 240));
 
-  ThreadingErrors *const errors = nx::allocate<ThreadingErrors>();
+  ValidationErrors *const errors = nx::allocate<ValidationErrors>();
   nx::log::add_sink(errors);
   std::atomic<bool> stop{false};
   std::atomic<u32> submitted{0};
@@ -386,6 +388,124 @@ TEST_CASE("vp9 planes: showing frames while another thread submits frames "
   nx::log::remove_sink(errors);
   CHECK(shown > 0u);
   CHECK(submitted.load() > 0u);
+  CHECK(counted == 0u);
+}
+
+namespace {
+
+[[nodiscard]] bool run_frame(gfx::device &device) {
+  return gfx::begin_headless_frame(device) != nullptr &&
+         gfx::end_headless_frame(device);
+}
+
+} // namespace
+
+TEST_CASE("vp9 planes: while frames run, every picture is shown, and the "
+          "planes frames sampled are reused") {
+  TestDevice fixture;
+  if (!fixture.ready)
+    SKIP("no usable RHI device");
+  if (!gfx::native(fixture.device, nx::gfx::video::video_decode_client())
+           .valid())
+    SKIP("no hardware video-decode queue");
+
+  std::vector<u8> backing;
+  const std::vector<RawFrame> frames =
+      read_frames(NX_VIDEO_FIXTURE_DIR "/test.webm", backing, 30);
+  REQUIRE(!frames.empty());
+
+  nx::gfx::video::video_decoder decoder;
+  REQUIRE(
+      decoder.init(fixture.device, nx::gfx::video::video_codec::VP9, 320, 240));
+
+  ValidationErrors *const errors = nx::allocate<ValidationErrors>();
+  nx::log::add_sink(errors);
+  u32 visible_count = 0;
+  u32 shown = 0;
+  for (u32 pass = 0; pass < 2; ++pass) {
+    decoder.reset_stream();
+    for (const RawFrame &frame : frames) {
+      bool visible = false;
+      u32 width = 0;
+      u32 height = 0;
+      REQUIRE(decoder.decode_frame(frame.bytes.data(),
+                                   nx::cast<u32>(frame.bytes.size()), visible,
+                                   width, height));
+      if (!visible)
+        continue;
+      ++visible_count;
+      if (decoder.show_last())
+        ++shown;
+      REQUIRE(run_frame(fixture.device));
+    }
+  }
+  nx::log::flush();
+  const u32 counted = errors->count();
+  nx::log::remove_sink(errors);
+  CHECK(visible_count > 16u);
+  CHECK(shown == visible_count);
+  CHECK(counted == 0u);
+}
+
+TEST_CASE("vp9 planes: with no frame to retire them the planes run out, the "
+          "last picture stays, and the decoder may go before they come back") {
+  TestDevice fixture;
+  if (!fixture.ready)
+    SKIP("no usable RHI device");
+  if (!gfx::native(fixture.device, nx::gfx::video::video_decode_client())
+           .valid())
+    SKIP("no hardware video-decode queue");
+
+  std::vector<u8> backing;
+  const std::vector<RawFrame> frames =
+      read_frames(NX_VIDEO_FIXTURE_DIR "/test.webm", backing, 30);
+  REQUIRE(!frames.empty());
+
+  nx::gfx::video::video_decoder decoder;
+  REQUIRE(
+      decoder.init(fixture.device, nx::gfx::video::video_codec::VP9, 320, 240));
+
+  ValidationErrors *const errors = nx::allocate<ValidationErrors>();
+  nx::log::add_sink(errors);
+  u32 shown = 0;
+  bool ran_out = false;
+  gfx::texture_handle last_luma;
+  gfx::texture_handle last_chroma;
+  for (const RawFrame &frame : frames) {
+    bool visible = false;
+    u32 width = 0;
+    u32 height = 0;
+    REQUIRE(decoder.decode_frame(frame.bytes.data(),
+                                 nx::cast<u32>(frame.bytes.size()), visible,
+                                 width, height));
+    if (!visible)
+      continue;
+    if (decoder.show_last()) {
+      REQUIRE(!ran_out);
+      ++shown;
+      last_luma = decoder.luma_texture();
+      last_chroma = decoder.chroma_texture();
+      continue;
+    }
+    ran_out = true;
+    CHECK(decoder.luma_texture() == last_luma);
+    CHECK(decoder.chroma_texture() == last_chroma);
+  }
+  CHECK(shown > 1u);
+  REQUIRE(ran_out);
+  CHECK(gfx::native(fixture.device, decoder.luma_texture()).image != nullptr);
+
+  REQUIRE(run_frame(fixture.device));
+  REQUIRE(run_frame(fixture.device));
+  REQUIRE(run_frame(fixture.device));
+  CHECK(decoder.show_last());
+
+  decoder.shutdown();
+  for (u32 frame = 0; frame < 4; ++frame)
+    REQUIRE(run_frame(fixture.device));
+  nx::log::flush();
+  const u32 counted = errors->count();
+  nx::log::remove_sink(errors);
   CHECK(counted == 0u);
 }
 
