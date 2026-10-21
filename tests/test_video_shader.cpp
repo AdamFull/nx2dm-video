@@ -2,26 +2,27 @@
 #include "framework/nxtest.h"
 
 #include "core/foundation/platform/filesystem.h"
+#include "nx/gfx/gfx.h"
+#include "rendering/owned_device.h"
 #include "rendering/pipeline_test_utils.h"
-#include "rendering/rhi/rhi.h"
 #include "rendering/rhi/shaders/nx_interop.h"
 #include "video/video_interop.h"
 
 #include <cstring>
 #include <vector>
 
-namespace {
+namespace gfx = nx::gfx;
 
-namespace rhi = nxe::rhi;
+namespace {
 
 constexpr u32 TARGET = 8;
 
 struct TestDevice {
-  rhi::Device device;
+  nxe::test::OwnedDevice device;
   bool ready = false;
 
   TestDevice() {
-    rhi::DeviceDesc desc{};
+    gfx::device_desc desc{};
     desc.application_name = "nx video tests";
     ready = device.init(desc);
   }
@@ -33,7 +34,7 @@ struct TestDevice {
   TestDevice &operator=(const TestDevice &) = delete;
 };
 
-[[nodiscard]] rhi::ShaderHandle load_video(rhi::Device &device) {
+[[nodiscard]] gfx::shader_handle load_video(gfx::device &device) {
   const nx::string base = nx::string(NX_TEST_SHADER_DIR) + "/video/video";
   auto code = nx::fs::file_read(nx::fs::path_view(base + ".spv"));
   auto refl = nx::fs::file_read_text(nx::fs::path_view(base + ".refl.json"));
@@ -45,41 +46,43 @@ struct TestDevice {
       refl->view());
 }
 
-[[nodiscard]] rhi::TextureHandle upload(rhi::Device &device,
-                                        const rhi::Format fmt, const u32 width,
-                                        const u32 height, const u32 row_pitch,
-                                        const std::vector<u8> &data,
-                                        const nx::string_view name) {
-  const rhi::TextureHandle tex = device.create_texture({
-      .name = name,
-      .format = fmt,
-      .width = width,
-      .height = height,
-      .usage = rhi::TextureUsage::Sampled | rhi::TextureUsage::CopyDst,
-  });
+[[nodiscard]] gfx::texture_handle upload(gfx::device &device,
+                                         const gfx::format fmt, const u32 width,
+                                         const u32 height, const u32 row_pitch,
+                                         const std::vector<u8> &data,
+                                         const nx::string_view name) {
+  const gfx::texture_handle tex =
+      gfx::create_texture(device, {
+                                      .name = name,
+                                      .format = fmt,
+                                      .width = width,
+                                      .height = height,
+                                      .usage = gfx::texture_usage::Sampled |
+                                               gfx::texture_usage::CopyDst,
+                                  });
   if (!tex.valid())
     return {};
-  rhi::ImageSubresource sub{};
+  gfx::image_subresource sub{};
   sub.size = nx::cast<u64>(data.size());
   sub.width = width;
   sub.height = height;
   sub.depth = 1;
   sub.row_pitch = row_pitch;
-  const rhi::ImageSubresource layout[1] = {sub};
-  (void)device.uploader().upload_texture(
-      tex, std::span<const u8>(data.data(), data.size()),
-      std::span<const rhi::ImageSubresource>(layout, 1));
+  const gfx::image_subresource layout[1] = {sub};
+  (void)gfx::upload_texture(device, tex,
+                            std::span<const u8>(data.data(), data.size()),
+                            std::span<const gfx::image_subresource>(layout, 1));
   return tex;
 }
 
-[[nodiscard]] rhi::TextureHandle make_luma(rhi::Device &device,
-                                           const std::vector<u8> &y) {
-  return upload(device, rhi::Format::R8_UNORM, TARGET, TARGET, TARGET, y,
+[[nodiscard]] gfx::texture_handle make_luma(gfx::device &device,
+                                            const std::vector<u8> &y) {
+  return upload(device, gfx::format::R8_UNORM, TARGET, TARGET, TARGET, y,
                 "luma");
 }
 
-[[nodiscard]] rhi::TextureHandle make_chroma(rhi::Device &device, const u8 cb,
-                                             const u8 cr) {
+[[nodiscard]] gfx::texture_handle make_chroma(gfx::device &device, const u8 cb,
+                                              const u8 cr) {
   const u32 cw = TARGET / 2;
   const u32 ch = TARGET / 2;
   std::vector<u8> data(nx::cast<usize>(cw) * ch * 2);
@@ -87,89 +90,93 @@ struct TestDevice {
     data[i] = cb;
     data[i + 1] = cr;
   }
-  return upload(device, rhi::Format::RG8_UNORM, cw, ch, cw * 2, data, "chroma");
+  return upload(device, gfx::format::RG8_UNORM, cw, ch, cw * 2, data, "chroma");
 }
 
 struct Rendered {
-  rhi::ReadbackResult pixels;
+  gfx::readback_result pixels;
   bool ok = false;
 };
 
-[[nodiscard]] Rendered draw(rhi::Device &device, rhi::ShaderHandle shader,
-                            rhi::TextureHandle luma, rhi::TextureHandle chroma,
-                            rhi::TextureHandle target,
-                            rhi::SamplerHandle sampler,
-                            const float kr = 0.2126f, const float kb = 0.0722f,
-                            const u32 full_range = 0) {
-  const rhi::PipelineHandle pipeline = nxe::test::compile_pipeline(device, {
-      .name = "video",
-      .vertex = {.shader = shader, .entry_point = "vs_main"},
-      .fragment = {.shader = shader, .entry_point = "fs_main"},
-      .color_formats = {rhi::Format::RGBA8_UNORM},
-      .color_count = 1,
-  });
+[[nodiscard]] Rendered
+draw(gfx::device &device, gfx::shader_handle shader, gfx::texture_handle luma,
+     gfx::texture_handle chroma, gfx::texture_handle target,
+     gfx::sampler_handle sampler, const float kr = 0.2126f,
+     const float kb = 0.0722f, const u32 full_range = 0) {
+  const gfx::pipeline_handle pipeline = nxe::test::compile_pipeline(
+      device, {
+                  .name = "video",
+                  .vertex = {.shader = shader, .entry_point = "vs_main"},
+                  .fragment = {.shader = shader, .entry_point = "fs_main"},
+                  .color_formats = {gfx::format::RGBA8_UNORM},
+                  .color_count = 1,
+              });
   if (!pipeline.valid())
     return {};
 
   GpuVideoPush push;
-  const u32 sampler_index = device.sampler_index(sampler);
-  push.luma = NxTexture2D<float4>::from_indices(device.texture_index(luma),
-                                                sampler_index);
-  push.chroma = NxTexture2D<float4>::from_indices(device.texture_index(chroma),
-                                                  sampler_index);
+  const u32 sampler_index = gfx::sampler_index(device, sampler);
+  push.luma = NxTexture2D<float4>::from_indices(
+      gfx::texture_index(device, luma), sampler_index);
+  push.chroma = NxTexture2D<float4>::from_indices(
+      gfx::texture_index(device, chroma), sampler_index);
   push.luma_weights[0] = kr;
   push.luma_weights[1] = kb;
   push.full_range = full_range;
 
-  rhi::CommandContext cmd;
-  if (!device.begin_headless_frame(cmd)) {
-    device.destroy_pipeline(pipeline);
+  gfx::command_list *cmd = nullptr;
+  if ((cmd = gfx::begin_headless_frame(device)) == nullptr) {
+    gfx::destroy_pipeline(device, pipeline);
     return {};
   }
-  cmd.barrier(rhi::TextureBarrier{.texture = target,
-                                  .from = rhi::ResourceState::Undefined,
-                                  .to = rhi::ResourceState::ColorAttachment});
-  rhi::RenderPassDesc pass = {};
+  gfx::barrier(
+      *cmd, gfx::texture_barrier{.texture = target,
+                                 .from = gfx::resource_state::Undefined,
+                                 .to = gfx::resource_state::ColorAttachment});
+  gfx::render_pass_desc pass = {};
   pass.name = "video";
   pass.color[0].texture = target;
-  pass.color[0].load = rhi::LoadOp::Clear;
-  pass.color[0].store = rhi::StoreOp::Store;
-  pass.color[0].clear = rhi::clear_color(0.f, 0.f, 0.f, 1.f);
+  pass.color[0].load = gfx::load_op::Clear;
+  pass.color[0].store = gfx::store_op::Store;
+  pass.color[0].clear = gfx::clear_color(0.f, 0.f, 0.f, 1.f);
   pass.color_count = 1;
-  cmd.begin_render_pass(pass);
-  cmd.set_viewport(
-      {.width = nx::cast<f32>(TARGET), .height = nx::cast<f32>(TARGET)});
-  cmd.set_scissor({{0, 0}, {TARGET, TARGET}});
-  cmd.bind_pipeline(pipeline);
-  cmd.push_constants(&push, sizeof(push));
-  cmd.draw(6, 1);
-  cmd.end_render_pass();
-  cmd.barrier(rhi::TextureBarrier{.texture = target,
-                                  .from = rhi::ResourceState::ColorAttachment,
-                                  .to = rhi::ResourceState::CopySrc});
-  if (!device.end_headless_frame()) {
-    device.destroy_pipeline(pipeline);
+  gfx::begin_render_pass(*cmd, pass);
+  gfx::set_viewport(
+      *cmd, {.width = nx::cast<f32>(TARGET), .height = nx::cast<f32>(TARGET)});
+  gfx::set_scissor(*cmd, {{0, 0}, {TARGET, TARGET}});
+  gfx::bind_pipeline(*cmd, pipeline);
+  gfx::push_constants(*cmd, &push, sizeof(push));
+  gfx::draw(*cmd, 6, 1);
+  gfx::end_render_pass(*cmd);
+  gfx::barrier(
+      *cmd, gfx::texture_barrier{.texture = target,
+                                 .from = gfx::resource_state::ColorAttachment,
+                                 .to = gfx::resource_state::CopySrc});
+  if (!gfx::end_headless_frame(device)) {
+    gfx::destroy_pipeline(device, pipeline);
     return {};
   }
-  device.wait_idle();
+  gfx::wait_idle(device);
 
   Rendered out;
-  out.pixels = device.uploader().read_texture(target);
+  out.pixels = gfx::read_texture(device, target);
   out.ok = out.pixels.data != nullptr;
   if (out.ok)
-    device.uploader().wait(out.pixels.ticket);
-  device.destroy_pipeline(pipeline);
+    gfx::wait_upload(device, out.pixels.ticket);
+  gfx::destroy_pipeline(device, pipeline);
   return out;
 }
 
-[[nodiscard]] rhi::TextureHandle make_target(rhi::Device &device) {
-  return device.create_texture({
-      .name = "video target",
-      .format = rhi::Format::RGBA8_UNORM,
-      .width = TARGET,
-      .height = TARGET,
-      .usage = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::CopySrc,
-  });
+[[nodiscard]] gfx::texture_handle make_target(gfx::device &device) {
+  return gfx::create_texture(device,
+                             {
+                                 .name = "video target",
+                                 .format = gfx::format::RGBA8_UNORM,
+                                 .width = TARGET,
+                                 .height = TARGET,
+                                 .usage = gfx::texture_usage::RenderTarget |
+                                          gfx::texture_usage::CopySrc,
+                             });
 }
 
 [[nodiscard]] usize texel(const u32 row, const u32 col) {
@@ -182,22 +189,23 @@ TEST_CASE("video shader: a grey frame converts to grey (BT.709)") {
   TestDevice fixture;
   if (!fixture.ready)
     SKIP("no usable RHI device");
-  rhi::Device &device = fixture.device;
+  gfx::device &device = fixture.device;
 
-  const rhi::ShaderHandle shader = load_video(device);
+  const gfx::shader_handle shader = load_video(device);
   if (!shader.valid())
     SKIP("shaders are not built in this configuration");
 
-  const rhi::TextureHandle luma =
+  const gfx::texture_handle luma =
       make_luma(device, std::vector<u8>(TARGET * TARGET, 220u));
-  const rhi::TextureHandle chroma = make_chroma(device, 128u, 128u);
-  device.uploader().flush();
+  const gfx::texture_handle chroma = make_chroma(device, 128u, 128u);
+  gfx::wait_uploads(device);
   REQUIRE(luma.valid());
   REQUIRE(chroma.valid());
 
-  const rhi::SamplerHandle sampler = device.create_sampler({.name = "video"});
+  const gfx::sampler_handle sampler =
+      gfx::create_sampler(device, {.name = "video"});
   REQUIRE(sampler.valid());
-  const rhi::TextureHandle target = make_target(device);
+  const gfx::texture_handle target = make_target(device);
   REQUIRE(target.valid());
 
   const Rendered r = draw(device, shader, luma, chroma, target, sampler);
@@ -213,33 +221,34 @@ TEST_CASE("video shader: a grey frame converts to grey (BT.709)") {
   CHECK(std::abs(rr - gg) <= 2);
   CHECK(std::abs(gg - bb) <= 2);
 
-  device.destroy_texture(target);
-  device.destroy_sampler(sampler);
-  device.destroy_texture(chroma);
-  device.destroy_texture(luma);
-  device.destroy_shader(shader);
+  gfx::destroy_texture(device, target);
+  gfx::destroy_sampler(device, sampler);
+  gfx::destroy_texture(device, chroma);
+  gfx::destroy_texture(device, luma);
+  gfx::destroy_shader(device, shader);
 }
 
 TEST_CASE("video shader: the colour matrix and range change the result") {
   TestDevice fixture;
   if (!fixture.ready)
     SKIP("no usable RHI device");
-  rhi::Device &device = fixture.device;
+  gfx::device &device = fixture.device;
 
-  const rhi::ShaderHandle shader = load_video(device);
+  const gfx::shader_handle shader = load_video(device);
   if (!shader.valid())
     SKIP("shaders are not built in this configuration");
 
-  const rhi::TextureHandle luma =
+  const gfx::texture_handle luma =
       make_luma(device, std::vector<u8>(TARGET * TARGET, 128u));
-  const rhi::TextureHandle chroma = make_chroma(device, 128u, 180u);
-  device.uploader().flush();
+  const gfx::texture_handle chroma = make_chroma(device, 128u, 180u);
+  gfx::wait_uploads(device);
   REQUIRE(luma.valid());
   REQUIRE(chroma.valid());
 
-  const rhi::SamplerHandle sampler = device.create_sampler({.name = "video"});
+  const gfx::sampler_handle sampler =
+      gfx::create_sampler(device, {.name = "video"});
   REQUIRE(sampler.valid());
-  const rhi::TextureHandle target = make_target(device);
+  const gfx::texture_handle target = make_target(device);
   REQUIRE(target.valid());
 
   const usize mid = texel(TARGET / 2, TARGET / 2);
@@ -262,20 +271,20 @@ TEST_CASE("video shader: the colour matrix and range change the result") {
   CHECK(r709 > r601 + 4);
   CHECK(std::abs(r709 - rfull) > 4);
 
-  device.destroy_texture(target);
-  device.destroy_sampler(sampler);
-  device.destroy_texture(chroma);
-  device.destroy_texture(luma);
-  device.destroy_shader(shader);
+  gfx::destroy_texture(device, target);
+  gfx::destroy_sampler(device, sampler);
+  gfx::destroy_texture(device, chroma);
+  gfx::destroy_texture(device, luma);
+  gfx::destroy_shader(device, shader);
 }
 
 TEST_CASE("video shader: the chroma channels convert, right way up") {
   TestDevice fixture;
   if (!fixture.ready)
     SKIP("no usable RHI device");
-  rhi::Device &device = fixture.device;
+  gfx::device &device = fixture.device;
 
-  const rhi::ShaderHandle shader = load_video(device);
+  const gfx::shader_handle shader = load_video(device);
   if (!shader.valid())
     SKIP("shaders are not built in this configuration");
 
@@ -283,15 +292,16 @@ TEST_CASE("video shader: the chroma channels convert, right way up") {
   for (u32 row = 0; row < TARGET / 2; ++row)
     for (u32 col = 0; col < TARGET; ++col)
       y[nx::cast<usize>(row) * TARGET + col] = 235u;
-  const rhi::TextureHandle luma = make_luma(device, y);
-  const rhi::TextureHandle chroma = make_chroma(device, 200u, 128u);
-  device.uploader().flush();
+  const gfx::texture_handle luma = make_luma(device, y);
+  const gfx::texture_handle chroma = make_chroma(device, 200u, 128u);
+  gfx::wait_uploads(device);
   REQUIRE(luma.valid());
   REQUIRE(chroma.valid());
 
-  const rhi::SamplerHandle sampler = device.create_sampler({.name = "video"});
+  const gfx::sampler_handle sampler =
+      gfx::create_sampler(device, {.name = "video"});
   REQUIRE(sampler.valid());
-  const rhi::TextureHandle target = make_target(device);
+  const gfx::texture_handle target = make_target(device);
   REQUIRE(target.valid());
 
   const Rendered r = draw(device, shader, luma, chroma, target, sampler);
@@ -302,9 +312,9 @@ TEST_CASE("video shader: the chroma channels convert, right way up") {
   CHECK(r.pixels.data[texel(0, TARGET / 2) + 1] > 200u);
   CHECK(r.pixels.data[bot + 1] < 40u);
 
-  device.destroy_texture(target);
-  device.destroy_sampler(sampler);
-  device.destroy_texture(chroma);
-  device.destroy_texture(luma);
-  device.destroy_shader(shader);
+  gfx::destroy_texture(device, target);
+  gfx::destroy_sampler(device, sampler);
+  gfx::destroy_texture(device, chroma);
+  gfx::destroy_texture(device, luma);
+  gfx::destroy_shader(device, shader);
 }

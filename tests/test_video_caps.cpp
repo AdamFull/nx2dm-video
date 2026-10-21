@@ -1,22 +1,23 @@
 
 #include "framework/nxtest.h"
 
-#include "rendering/rhi/device.h"
+#include "nx/gfx/gfx.h"
+#include "rendering/owned_device.h"
 #include "video/vulkan/vk_video.h"
 #include "video/vulkan/vk_video_client.h"
 
+namespace gfx = nx::gfx;
+
 namespace {
 
-namespace rhi = nxe::rhi;
-
 struct TestDevice {
-  rhi::NativeDeviceClient *const clients[1] = {
+  gfx::native_device_client *const clients[1] = {
       &nxm::video::video_decode_client()};
-  rhi::Device device;
+  nxe::test::OwnedDevice device;
   bool ready = false;
 
   TestDevice() {
-    rhi::DeviceDesc desc{};
+    gfx::device_desc desc{};
     desc.application_name = "nx video caps tests";
     desc.native_clients = clients;
     ready = device.init(desc);
@@ -52,7 +53,7 @@ TEST_CASE("video caps: a decode capability query is coherent and never faults") 
     }
   }
 
-  if (fixture.device.native_queue(nxm::video::video_decode_client()).valid())
+  if (gfx::native(fixture.device, nxm::video::video_decode_client()).valid())
     CHECK(nxm::video::query_video_decode_caps(fixture.device,
                                               nxm::video::VideoCodec::VP9)
               .supported);
@@ -62,7 +63,7 @@ TEST_CASE("video decode: a session and its memory come up, and tear down") {
   TestDevice fixture;
   if (!fixture.ready)
     SKIP("no usable RHI device");
-  if (!fixture.device.native_queue(nxm::video::video_decode_client()).valid())
+  if (!gfx::native(fixture.device, nxm::video::video_decode_client()).valid())
     SKIP("no hardware video-decode queue");
 
   nxm::video::VideoDecoder decoder;

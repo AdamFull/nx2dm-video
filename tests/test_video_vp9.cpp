@@ -3,7 +3,7 @@
 
 #include "video/video_hw.h"
 
-#include "rendering/rhi/device.h"
+#include "nx/gfx/gfx.h"
 #include "video/vulkan/vk_video.h"
 #include "video/vulkan/vk_video_client.h"
 #include "video/vulkan/vk_vp9.h"
@@ -14,6 +14,7 @@
 
 #include "mkvparser/mkvparser.h"
 
+#include "rendering/owned_device.h"
 #include "vpx/vp8dx.h"
 #include "vpx/vpx_decoder.h"
 #include "vpx/vpx_image.h"
@@ -23,9 +24,9 @@
 #include <cstring>
 #include <vector>
 
-namespace {
+namespace gfx = nx::gfx;
 
-namespace rhi = nxe::rhi;
+namespace {
 
 class MemoryReader final : public mkvparser::IMkvReader {
 public:
@@ -192,12 +193,12 @@ struct VpxLuma {
 }
 
 struct TestDevice {
-  nxe::rhi::NativeDeviceClient *const clients[1] = {
+  gfx::native_device_client *const clients[1] = {
       &nxm::video::video_decode_client()};
-  nxe::rhi::Device device;
+  nxe::test::OwnedDevice device;
   bool ready = false;
   TestDevice() {
-    nxe::rhi::DeviceDesc desc{};
+    gfx::device_desc desc{};
     desc.application_name = "nx video hw decode tests";
     desc.native_clients = clients;
     ready = device.init(desc);
@@ -335,7 +336,7 @@ TEST_CASE("vp9 planes: showing frames while another thread submits frames "
   TestDevice fixture;
   if (!fixture.ready)
     SKIP("no usable RHI device");
-  if (!fixture.device.native_queue(nxm::video::video_decode_client()).valid())
+  if (!gfx::native(fixture.device, nxm::video::video_decode_client()).valid())
     SKIP("no hardware video-decode queue");
 
   std::vector<u8> backing;
@@ -356,9 +357,9 @@ TEST_CASE("vp9 planes: showing frames while another thread submits frames "
     // The render job's part: frames submitted to the same queue.
     nx::thread frames_loop([&] {
       while (!stop.load(std::memory_order_acquire)) {
-        rhi::CommandContext cmd;
-        if (!fixture.device.begin_headless_frame(cmd) ||
-            !fixture.device.end_headless_frame())
+        gfx::command_list *cmd = nullptr;
+        if ((cmd = gfx::begin_headless_frame(fixture.device)) == nullptr ||
+            !gfx::end_headless_frame(fixture.device))
           break;
         submitted.fetch_add(1, std::memory_order_relaxed);
       }
@@ -390,7 +391,7 @@ TEST_CASE("vp9 planes: the resolved luma and chroma match libvpx") {
   TestDevice fixture;
   if (!fixture.ready)
     SKIP("no usable RHI device");
-  if (!fixture.device.native_queue(nxm::video::video_decode_client()).valid())
+  if (!gfx::native(fixture.device, nxm::video::video_decode_client()).valid())
     SKIP("no hardware video-decode queue");
 
   std::vector<u8> backing;
@@ -413,14 +414,14 @@ TEST_CASE("vp9 planes: the resolved luma and chroma match libvpx") {
   REQUIRE(decoder.show_last());
 
   const u32 coded = decoder.coded_extent().width;
-  const nxe::rhi::ReadbackResult luma =
-      fixture.device.uploader().read_texture(decoder.luma_texture());
-  const nxe::rhi::ReadbackResult chroma =
-      fixture.device.uploader().read_texture(decoder.chroma_texture());
+  const gfx::readback_result luma =
+      gfx::read_texture(fixture.device, decoder.luma_texture());
+  const gfx::readback_result chroma =
+      gfx::read_texture(fixture.device, decoder.chroma_texture());
   REQUIRE(luma.data != nullptr);
   REQUIRE(chroma.data != nullptr);
-  fixture.device.uploader().wait(luma.ticket);
-  fixture.device.uploader().wait(chroma.ticket);
+  gfx::wait_upload(fixture.device, luma.ticket);
+  gfx::wait_upload(fixture.device, chroma.ticket);
 
   const VpxLuma ref = vpx_decode_luma(frames, 0);
   REQUIRE(ref.ok);
@@ -499,10 +500,9 @@ TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
   REQUIRE(back.valid());
   CHECK(src.position() < 0.2);
   {
-    const nxe::rhi::ReadbackResult y =
-        fixture.device.uploader().read_texture(back.luma);
+    const gfx::readback_result y = gfx::read_texture(fixture.device, back.luma);
     REQUIRE(y.data != nullptr);
-    fixture.device.uploader().wait(y.ticket);
+    gfx::wait_upload(fixture.device, y.ticket);
     const VpxLuma ref = vpx_decode_luma(frames, 0);
     REQUIRE(ref.ok);
     usize mism = 0;
