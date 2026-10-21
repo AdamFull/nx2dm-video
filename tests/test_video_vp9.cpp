@@ -536,6 +536,8 @@ TEST_CASE("vp9 planes: the resolved luma and chroma match libvpx") {
   REQUIRE(w == 320u);
   REQUIRE(h == 240u);
   REQUIRE(decoder.show_last());
+  // Frames are what wait on the copy; a readback after one sees it.
+  REQUIRE(run_frame(fixture.device));
 
   const u32 coded = decoder.coded_extent().width;
   const gfx::readback_result luma =
