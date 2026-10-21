@@ -4,7 +4,6 @@ add_executable(nx_video_tests
         test_video_decode.cpp
         test_video_assets.cpp
         test_video_vp9.cpp
-        test_video_caps.cpp
         test_video_place.cpp
         ../video_source.cpp
         ../video_decode.cpp
@@ -15,21 +14,13 @@ add_executable(nx_video_tests
         ../video_audio.cpp
         ../video_hw.cpp
         ../video_cpu.cpp
-        ../video_mediacodec.cpp
-        ../vulkan/vk_video.cpp
-        ../vulkan/vk_vp9.cpp
-        ../vulkan/vk_video_client.cpp)
-
-if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    set_source_files_properties(../vulkan/vk_video.cpp ../vulkan/vk_vp9.cpp
-            PROPERTIES COMPILE_OPTIONS "-Wno-missing-field-initializers")
-endif ()
+        ../video_mediacodec.cpp)
 
 target_include_directories(nx_video_tests PRIVATE
         "${NX_ENGINE_ROOT}/engine" "${NX_ENGINE_ROOT}/modules")
 
 target_link_libraries(nx_video_tests
-        PRIVATE nx::test nx::foundation nx::gfx nx::glm nx::vpx nx::webm nx::opus
+        PRIVATE nx::test nx::foundation nx::gfx nx::gfx_video nx::glm nx::vpx nx::webm nx::opus
         nx::vorbis nx::gav1 nx::compile_options)
 
 if (ANDROID)

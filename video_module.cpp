@@ -7,7 +7,7 @@
 #include "video/video_place.h"
 #include "video/video_scripting.h"
 #if defined(NX_RHI_VULKAN)
-#include "video/vulkan/vk_video_client.h"
+#include "nx/gfx/video/client.h"
 #endif
 
 #include "app/engine.h"
@@ -156,7 +156,7 @@ public:
 
 #if defined(NX_RHI_VULKAN)
   [[nodiscard]] gfx::native_device_client *native_device_client() override {
-    return &video_decode_client();
+    return &nx::gfx::video::video_decode_client();
   }
 #endif
 

@@ -1,12 +1,12 @@
 #if defined(NX_RHI_VULKAN)
 
-#include "video/vulkan/vk_video_client.h"
+#include "nx/gfx/video/client.h"
 
-#include "video/vulkan/vk_video.h"
+#include "nx/gfx/video/decoder.h"
 
 namespace gfx = nx::gfx;
 
-namespace nxm::video {
+namespace nx::gfx::video {
 namespace {
 
 [[nodiscard]] VkPhysicalDevice adapter_of(const gfx::native_device &device) {
@@ -15,8 +15,8 @@ namespace {
 
 } // namespace
 
-void VideoDecodeClient::device_extensions(const gfx::native_device &adapter,
-                                          gfx::native_names &out) {
+void decode_client::device_extensions(const gfx::native_device &adapter,
+                                      gfx::native_names &out) {
   if (find_vp9_decode_family(adapter_of(adapter)) == ~0u)
     return;
   out.emplace_back(VK_KHR_VIDEO_QUEUE_EXTENSION_NAME);
@@ -24,8 +24,8 @@ void VideoDecodeClient::device_extensions(const gfx::native_device &adapter,
   out.emplace_back(VK_KHR_VIDEO_DECODE_VP9_EXTENSION_NAME);
 }
 
-void VideoDecodeClient::device_features(const gfx::native_device &adapter,
-                                        void *const features) {
+void decode_client::device_features(const gfx::native_device &adapter,
+                                    void *const features) {
   if (features == nullptr || find_vp9_decode_family(adapter_of(adapter)) == ~0u)
     return;
   m_vp9.pNext = nullptr;
@@ -36,15 +36,15 @@ void VideoDecodeClient::device_features(const gfx::native_device &adapter,
   link->pNext = reinterpret_cast<VkBaseOutStructure *>(&m_vp9);
 }
 
-u32 VideoDecodeClient::queue_family(const gfx::native_device &adapter) {
+u32 decode_client::queue_family(const gfx::native_device &adapter) {
   return find_vp9_decode_family(adapter_of(adapter));
 }
 
-VideoDecodeClient &video_decode_client() noexcept {
-  static VideoDecodeClient client;
+decode_client &video_decode_client() noexcept {
+  static decode_client client;
   return client;
 }
 
-} // namespace nxm::video
+} // namespace nx::gfx::video
 
 #endif

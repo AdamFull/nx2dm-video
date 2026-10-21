@@ -1,10 +1,10 @@
 #if defined(NX_RHI_VULKAN)
 
-#include "video/vulkan/vk_video.h"
 #include "nx/gfx/gfx.h"
+#include "nx/gfx/video/client.h"
+#include "nx/gfx/video/decoder.h"
+#include "nx/gfx/video/vp9.h"
 #include "nx/gfx/vulkan.h"
-#include "video/vulkan/vk_video_client.h"
-#include "video/vulkan/vk_vp9.h"
 
 #include "core/foundation/diagnostics/log.h"
 
@@ -13,7 +13,7 @@
 
 namespace gfx = nx::gfx;
 
-namespace nxm::video {
+namespace nx::gfx::video {
 
 namespace {
 
@@ -75,9 +75,9 @@ u32 find_vp9_decode_family(const VkPhysicalDevice adapter) {
   return NONE;
 }
 
-VideoDecodeCaps query_video_decode_caps(const gfx::device &device,
-                                        const VideoCodec codec) {
-  VideoDecodeCaps out;
+decode_caps query_decode_caps(const gfx::device &device,
+                              const video_codec codec) {
+  decode_caps out;
   const VkPhysicalDevice phys = gfx::vk::physical_device(device);
   if (phys == VK_NULL_HANDLE ||
       vkGetPhysicalDeviceVideoCapabilitiesKHR == nullptr)
@@ -86,8 +86,8 @@ VideoDecodeCaps query_video_decode_caps(const gfx::device &device,
     return out;
 
   const char *const codec_extension =
-      codec == VideoCodec::AV1 ? VK_KHR_VIDEO_DECODE_AV1_EXTENSION_NAME
-                               : VK_KHR_VIDEO_DECODE_VP9_EXTENSION_NAME;
+      codec == video_codec::AV1 ? VK_KHR_VIDEO_DECODE_AV1_EXTENSION_NAME
+                                : VK_KHR_VIDEO_DECODE_VP9_EXTENSION_NAME;
   if (!extension_offered(phys, codec_extension))
     return out;
 
@@ -110,7 +110,7 @@ VideoDecodeCaps query_video_decode_caps(const gfx::device &device,
   VkVideoDecodeAV1CapabilitiesKHR av1_caps{
       VK_STRUCTURE_TYPE_VIDEO_DECODE_AV1_CAPABILITIES_KHR};
 
-  if (codec == VideoCodec::AV1) {
+  if (codec == video_codec::AV1) {
     av1.stdProfile = STD_VIDEO_AV1_PROFILE_MAIN;
     av1.filmGrainSupport = VK_FALSE;
     profile.pNext = &av1;
@@ -190,7 +190,7 @@ create_video_image(const gfx::device &owner, const VkPhysicalDevice phys,
                    const VkVideoProfileListInfoKHR &profiles,
                    const VkFormat format, const VkExtent2D extent,
                    const VkImageUsageFlags usage, const u32 *const families,
-                   const u32 family_count, VideoImage &out) {
+                   const u32 family_count, video_image &out) {
   const VkDevice dev = gfx::vk::logical_device(owner);
   VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
   ci.pNext = &profiles;
@@ -240,7 +240,7 @@ create_video_image(const gfx::device &owner, const VkPhysicalDevice phys,
                                                   &out.view)) == VK_SUCCESS;
 }
 
-void destroy_video_image(const VkDevice dev, VideoImage &image) {
+void destroy_video_image(const VkDevice dev, video_image &image) {
   if (image.view != VK_NULL_HANDLE)
     vkDestroyImageView(dev, image.view, nullptr);
   if (image.image != VK_NULL_HANDLE)
@@ -303,9 +303,9 @@ void destroy_video_image(const VkDevice dev, VideoImage &image) {
 
 } // namespace
 
-VideoDecoder::~VideoDecoder() { shutdown(); }
+video_decoder::~video_decoder() { shutdown(); }
 
-void VideoDecoder::shutdown() noexcept {
+void video_decoder::shutdown() noexcept {
   if (m_device != nullptr) {
     const VkDevice dev = gfx::vk::logical_device(*m_device);
     if (gfx::device_status(*m_device) == gfx::gpu_device_status::Ready)
@@ -331,7 +331,7 @@ void VideoDecoder::shutdown() noexcept {
       vkDestroyFence(dev, m_fence, nullptr);
     if (m_pool != VK_NULL_HANDLE)
       vkDestroyCommandPool(dev, m_pool, nullptr);
-    for (VideoImage &image : m_dpb)
+    for (video_image &image : m_dpb)
       destroy_video_image(dev, image);
     destroy_video_image(dev, m_output);
     if (m_session != VK_NULL_HANDLE)
@@ -374,11 +374,11 @@ void VideoDecoder::shutdown() noexcept {
   m_max_dpb_slots = 0;
 }
 
-bool VideoDecoder::init(gfx::device &device, const VideoCodec codec,
-                        const u32 width, const u32 height) {
+bool video_decoder::init(gfx::device &device, const video_codec codec,
+                         const u32 width, const u32 height) {
   shutdown();
   const gfx::native_queue video = gfx::native(device, video_decode_client());
-  if (!video.valid() || codec != VideoCodec::VP9)
+  if (!video.valid() || codec != video_codec::VP9)
     return false;
 
   m_device = &device;
@@ -399,11 +399,11 @@ bool VideoDecoder::init(gfx::device &device, const VideoCodec codec,
 
   VkVideoDecodeVP9CapabilitiesKHR vp9_caps{
       VK_STRUCTURE_TYPE_VIDEO_DECODE_VP9_CAPABILITIES_KHR};
-  VkVideoDecodeCapabilitiesKHR decode_caps{
+  VkVideoDecodeCapabilitiesKHR decode_capabilities{
       VK_STRUCTURE_TYPE_VIDEO_DECODE_CAPABILITIES_KHR};
-  decode_caps.pNext = &vp9_caps;
+  decode_capabilities.pNext = &vp9_caps;
   VkVideoCapabilitiesKHR caps{VK_STRUCTURE_TYPE_VIDEO_CAPABILITIES_KHR};
-  caps.pNext = &decode_caps;
+  caps.pNext = &decode_capabilities;
   if (const VkResult r =
           vkGetPhysicalDeviceVideoCapabilitiesKHR(phys, &profile, &caps);
       r != VK_SUCCESS) {
@@ -443,7 +443,7 @@ bool VideoDecoder::init(gfx::device &device, const VideoCodec codec,
   profiles.profileCount = 1;
   profiles.pProfiles = &profile;
   m_coincide =
-      (decode_caps.flags &
+      (decode_capabilities.flags &
        VK_VIDEO_DECODE_CAPABILITY_DPB_AND_OUTPUT_COINCIDE_BIT_KHR) != 0;
   const bool coincide = m_coincide;
   if (coincide) {
@@ -558,7 +558,7 @@ bool VideoDecoder::init(gfx::device &device, const VideoCodec codec,
                 : VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR) |
       VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
   m_dpb.resize(m_max_dpb_slots);
-  for (VideoImage &slot : m_dpb) {
+  for (video_image &slot : m_dpb) {
     if (!create_video_image(device, phys, profiles, m_dpb_format, m_extent,
                             dpb_usage, families, 2, slot)) {
       nx::logw(nx::log::rhi, "video: dpb image allocation failed");
@@ -588,7 +588,7 @@ bool VideoDecoder::init(gfx::device &device, const VideoCodec codec,
   return true;
 }
 
-bool VideoDecoder::create_command_resources() {
+bool video_decoder::create_command_resources() {
   const VkDevice dev = gfx::vk::logical_device(*m_device);
   const u32 video_family = m_video_family;
 
@@ -623,7 +623,7 @@ bool VideoDecoder::create_command_resources() {
                                                   &m_fence)) == VK_SUCCESS;
 }
 
-bool VideoDecoder::create_bitstream_buffer(
+bool video_decoder::create_bitstream_buffer(
     const u64 capacity, const VkVideoProfileListInfoKHR &profiles) {
   m_bitstream_capacity = align_up64(capacity, m_bitstream_size_align);
   return create_host_buffer(
@@ -632,7 +632,7 @@ bool VideoDecoder::create_bitstream_buffer(
       m_bitstream_memory, m_bitstream_mapped);
 }
 
-u32 VideoDecoder::allocate_slot() noexcept {
+u32 video_decoder::allocate_slot() noexcept {
   for (u32 tries = 0; tries < m_max_dpb_slots; ++tries) {
     const u32 slot = m_next_slot;
     m_next_slot = (m_next_slot + 1) % m_max_dpb_slots;
@@ -648,9 +648,9 @@ u32 VideoDecoder::allocate_slot() noexcept {
   return m_next_slot;
 }
 
-bool VideoDecoder::decode(const u8 *const frame, const u32 size,
-                          DecodedPicture &out) {
-  out = DecodedPicture{};
+bool video_decoder::decode(const u8 *const frame, const u32 size,
+                           decoded_picture &out) {
+  out = decoded_picture{};
   if (!ready() || frame == nullptr || size == 0)
     return false;
 
@@ -662,7 +662,7 @@ bool VideoDecoder::decode(const u8 *const frame, const u32 size,
     ref_h[i] = live ? m_slot_height[m_vp9_to_dpb[i]] : 0;
   }
 
-  Vp9FrameHeader hdr;
+  vp9_frame_header hdr;
   if (!parse_vp9_frame_header(frame, size, ref_w, ref_h, hdr))
     return false;
 
@@ -802,7 +802,7 @@ bool VideoDecoder::decode(const u8 *const frame, const u32 size,
   // already there from earlier decodes and skip the barrier.
   VkImageMemoryBarrier2 barriers[10];
   u32 barrier_count = 0;
-  const auto to_layout = [&](VideoImage &img, const VkImageLayout layout) {
+  const auto to_layout = [&](video_image &img, const VkImageLayout layout) {
     if (img.layout == layout)
       return;
     VkImageMemoryBarrier2 &b = barriers[barrier_count++];
@@ -876,8 +876,8 @@ bool VideoDecoder::decode(const u8 *const frame, const u32 size,
   return true;
 }
 
-bool VideoDecoder::create_sampleable_image(const u32 *const families,
-                                           const u32 family_count) {
+bool video_decoder::create_sampleable_image(const u32 *const families,
+                                            const u32 family_count) {
   const VkDevice dev = gfx::vk::logical_device(*m_device);
   VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
   ci.imageType = VK_IMAGE_TYPE_2D;
@@ -920,10 +920,10 @@ bool VideoDecoder::create_sampleable_image(const u32 *const families,
                                                       0)) == VK_SUCCESS;
 }
 
-bool VideoDecoder::present(const u32 slot) {
+bool video_decoder::present(const u32 slot) {
   if (!ready() || !m_video_supports_transfer)
     return false;
-  VideoImage &src = m_coincide ? m_dpb[slot] : m_output;
+  video_image &src = m_coincide ? m_dpb[slot] : m_output;
   if (m_coincide && slot >= m_dpb.size())
     return false;
   const VkImageLayout restore = m_coincide
@@ -937,7 +937,7 @@ bool VideoDecoder::present(const u32 slot) {
   begin_cmd.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   NX_GFX_VK_TRY(*m_device, vkBeginCommandBuffer(m_cmd, &begin_cmd));
 
-  const auto barrier = [&](VideoImage &img, const VkImageLayout to) {
+  const auto barrier = [&](video_image &img, const VkImageLayout to) {
     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
     b.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     b.srcAccessMask =
@@ -985,7 +985,7 @@ bool VideoDecoder::present(const u32 slot) {
   return true;
 }
 
-bool VideoDecoder::create_plane_resources() {
+bool video_decoder::create_plane_resources() {
   const VkDevice dev = gfx::vk::logical_device(*m_device);
 
   VkCommandPoolCreateInfo cpc{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
@@ -1029,9 +1029,9 @@ bool VideoDecoder::create_plane_resources() {
   return m_y.valid() && m_cbcr.valid();
 }
 
-bool VideoDecoder::decode_frame(const u8 *const frame, const u32 size,
-                                bool &shown, u32 &width, u32 &height) {
-  DecodedPicture pic;
+bool video_decoder::decode_frame(const u8 *const frame, const u32 size,
+                                 bool &shown, u32 &width, u32 &height) {
+  decoded_picture pic;
   if (!decode(frame, size, pic)) {
     m_have_last = false;
     return false;
@@ -1044,14 +1044,14 @@ bool VideoDecoder::decode_frame(const u8 *const frame, const u32 size,
   return true;
 }
 
-void VideoDecoder::reset_stream() noexcept {
+void video_decoder::reset_stream() noexcept {
   for (u32 i = 0; i < 8; ++i)
     m_vp9_valid[i] = false;
   m_have_last = false;
   m_needs_reset = true;
 }
 
-bool VideoDecoder::show_last() {
+bool video_decoder::show_last() {
   if (!m_have_last || !present(m_last_slot))
     return false;
 
@@ -1130,6 +1130,6 @@ bool VideoDecoder::show_last() {
   return true;
 }
 
-} // namespace nxm::video
+} // namespace nx::gfx::video
 
 #endif

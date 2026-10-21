@@ -2,9 +2,9 @@
 
 #include "nx/gfx/vulkan.h"
 
-namespace nxm::video {
+namespace nx::gfx::video {
 
-struct Vp9FrameHeader {
+struct vp9_frame_header {
   bool valid = false;
 
   bool show_existing_frame = false;
@@ -25,6 +25,6 @@ struct Vp9FrameHeader {
 [[nodiscard]] bool parse_vp9_frame_header(const u8 *data, u32 size,
                                           const u32 ref_width[8],
                                           const u32 ref_height[8],
-                                          Vp9FrameHeader &out);
+                                          vp9_frame_header &out);
 
-} // namespace nxm::video
+} // namespace nx::gfx::video

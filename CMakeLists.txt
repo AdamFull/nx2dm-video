@@ -19,20 +19,17 @@ endif ()
 
 nx_add_video_codecs()
 
+set(NX_GFX_VIDEO_TESTS ${NX_BUILD_TESTS})
+add_subdirectory(third_party/nx-gfx-video)
+
 nx_module(video
         DISPLAY "WebM video playback"
         SOURCES video_module.cpp video_source.cpp video_pass.cpp video_decode.cpp
                 video_demux.cpp video_mediacodec.cpp video_clip.cpp video_asset.cpp
                 video_webm.cpp
                 video_audio.cpp video_scripting.cpp video_hw.cpp video_cpu.cpp
-                vulkan/vk_video.cpp vulkan/vk_vp9.cpp vulkan/vk_video_client.cpp
-        DEPENDS nx::vpx nx::webm nx::opus nx::vorbis nx::gav1
+        DEPENDS nx::gfx_video nx::vpx nx::webm nx::opus nx::vorbis nx::gav1
         ASSETS assets)
-
-if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    set_source_files_properties(vulkan/vk_video.cpp vulkan/vk_vp9.cpp
-            PROPERTIES COMPILE_OPTIONS "-Wno-missing-field-initializers")
-endif ()
 
 if (ANDROID)
     target_link_libraries(nx_module_video PUBLIC mediandk log)

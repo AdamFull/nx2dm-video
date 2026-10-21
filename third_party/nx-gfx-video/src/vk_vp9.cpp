@@ -1,8 +1,8 @@
 #if defined(NX_RHI_VULKAN)
 
-#include "video/vulkan/vk_vp9.h"
+#include "nx/gfx/video/vp9.h"
 
-namespace nxm::video {
+namespace nx::gfx::video {
 namespace {
 
 constexpr u32 VP9_FRAME_MARKER = 2;
@@ -58,7 +58,7 @@ private:
   bool m_overrun = false;
 };
 
-void color_config(BitReader &r, const u32 profile, Vp9FrameHeader &out) {
+void color_config(BitReader &r, const u32 profile, vp9_frame_header &out) {
   u8 bit_depth = 8;
   if (profile >= 2)
     bit_depth = r.bit() ? 12 : 10;
@@ -89,7 +89,7 @@ void color_config(BitReader &r, const u32 profile, Vp9FrameHeader &out) {
   out.color.flags.color_range = color_range;
 }
 
-void loop_filter_params(BitReader &r, Vp9FrameHeader &out) {
+void loop_filter_params(BitReader &r, vp9_frame_header &out) {
   StdVideoVP9LoopFilter &lf = out.loop_filter;
   lf.loop_filter_level = nx::cast<u8>(r.f(6));
   lf.loop_filter_sharpness = nx::cast<u8>(r.f(3));
@@ -113,14 +113,14 @@ void loop_filter_params(BitReader &r, Vp9FrameHeader &out) {
   }
 }
 
-void quantization_params(BitReader &r, Vp9FrameHeader &out) {
+void quantization_params(BitReader &r, vp9_frame_header &out) {
   out.picture.base_q_idx = nx::cast<u8>(r.f(8));
   out.picture.delta_q_y_dc = r.delta_q();
   out.picture.delta_q_uv_dc = r.delta_q();
   out.picture.delta_q_uv_ac = r.delta_q();
 }
 
-void segmentation_params(BitReader &r, Vp9FrameHeader &out) {
+void segmentation_params(BitReader &r, vp9_frame_header &out) {
   // Per SEG_LVL feature: how many bits it carries, and whether it is signed.
   static constexpr u8 feature_bits[STD_VIDEO_VP9_SEG_LVL_MAX] = {8, 6, 2, 0};
   static constexpr bool feature_signed[STD_VIDEO_VP9_SEG_LVL_MAX] = {
@@ -162,7 +162,7 @@ void segmentation_params(BitReader &r, Vp9FrameHeader &out) {
   }
 }
 
-void tile_info(BitReader &r, const u32 frame_width, Vp9FrameHeader &out) {
+void tile_info(BitReader &r, const u32 frame_width, vp9_frame_header &out) {
   const u32 mi_cols = (frame_width + 7u) >> 3;
   const u32 sb64_cols = (mi_cols + 7u) >> 3;
 
@@ -204,8 +204,8 @@ StdVideoVP9InterpolationFilter read_interpolation_filter(BitReader &r) {
 
 bool parse_vp9_frame_header(const u8 *const data, const u32 size,
                             const u32 ref_width[8], const u32 ref_height[8],
-                            Vp9FrameHeader &out) {
-  out = Vp9FrameHeader{};
+                            vp9_frame_header &out) {
+  out = vp9_frame_header{};
   if (data == nullptr || size == 0)
     return false;
 
@@ -337,6 +337,6 @@ bool parse_vp9_frame_header(const u8 *const data, const u32 size,
   return out.valid;
 }
 
-} // namespace nxm::video
+} // namespace nx::gfx::video
 
 #endif

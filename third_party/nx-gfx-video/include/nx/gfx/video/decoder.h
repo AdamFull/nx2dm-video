@@ -4,11 +4,11 @@
 #include "nx/gfx/types.h"
 #include "nx/gfx/vulkan.h"
 
-namespace nxm::video {
+namespace nx::gfx::video {
 
-enum class VideoCodec : u8 { VP9, AV1, Count };
+enum class video_codec : u8 { VP9, AV1, Count };
 
-struct VideoDecodeCaps {
+struct decode_caps {
   bool supported = false;
   u32 max_width = 0;
   u32 max_height = 0;
@@ -16,21 +16,21 @@ struct VideoDecodeCaps {
   bool dpb_and_output_coincide = false;
 };
 
-[[nodiscard]] VideoDecodeCaps
-query_video_decode_caps(const nx::gfx::device &device, VideoCodec codec);
+[[nodiscard]] decode_caps query_decode_caps(const nx::gfx::device &device,
+                                            video_codec codec);
 
 /// The queue family of @p adapter that decodes VP9 and draws nothing, or ~0u
 /// where the device has none or lacks the extensions and the feature.
 [[nodiscard]] u32 find_vp9_decode_family(VkPhysicalDevice adapter);
 
-struct VideoImage {
+struct video_image {
   VkImage image = VK_NULL_HANDLE;
   VkDeviceMemory memory = VK_NULL_HANDLE;
   VkImageView view = VK_NULL_HANDLE;
   VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
 };
 
-struct DecodedPicture {
+struct decoded_picture {
   bool ok = false;
   u32 slot = 0;
   bool show = false;
@@ -38,17 +38,17 @@ struct DecodedPicture {
   u32 height = 0;
 };
 
-class VideoDecoder {
+class video_decoder {
 public:
-  VideoDecoder() = default;
-  ~VideoDecoder();
+  video_decoder() = default;
+  ~video_decoder();
 
-  VideoDecoder(const VideoDecoder &) = delete;
-  VideoDecoder &operator=(const VideoDecoder &) = delete;
+  video_decoder(const video_decoder &) = delete;
+  video_decoder &operator=(const video_decoder &) = delete;
 
   /// Decodes on the queue @p device made for video_decode_client(); false
   /// where it made none.
-  [[nodiscard]] bool init(nx::gfx::device &device, VideoCodec codec, u32 width,
+  [[nodiscard]] bool init(nx::gfx::device &device, video_codec codec, u32 width,
                           u32 height);
   void shutdown() noexcept;
 
@@ -81,7 +81,7 @@ public:
   void reset_stream() noexcept;
 
 private:
-  [[nodiscard]] bool decode(const u8 *frame, u32 size, DecodedPicture &out);
+  [[nodiscard]] bool decode(const u8 *frame, u32 size, decoded_picture &out);
   [[nodiscard]] bool present(u32 slot);
   [[nodiscard]] bool create_command_resources();
   [[nodiscard]] bool
@@ -97,9 +97,9 @@ private:
   u32 m_video_family = ~0u;
   VkVideoSessionKHR m_session = VK_NULL_HANDLE;
   nx::small_vector<VkDeviceMemory, 4> m_memories;
-  nx::small_vector<VideoImage, 16> m_dpb;
-  VideoImage m_output;
-  VideoImage m_sampleable;
+  nx::small_vector<video_image, 16> m_dpb;
+  video_image m_output;
+  video_image m_sampleable;
   bool m_coincide = false;
   VkFormat m_picture_format = VK_FORMAT_UNDEFINED;
   VkFormat m_dpb_format = VK_FORMAT_UNDEFINED;
@@ -135,4 +135,4 @@ private:
   nx::gfx::texture_handle m_cbcr;
 };
 
-} // namespace nxm::video
+} // namespace nx::gfx::video

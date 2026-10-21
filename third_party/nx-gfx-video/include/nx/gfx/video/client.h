@@ -3,12 +3,12 @@
 #include "nx/gfx/native.h"
 #include "nx/gfx/vulkan.h"
 
-namespace nxm::video {
+namespace nx::gfx::video {
 
 /// Asks a Vulkan device, before it is made, for hardware VP9 decode: the video
 /// extensions, the VP9 feature and a queue in a decode family of its own. A
 /// device made without it, or that could not grant it, has no video queue.
-class VideoDecodeClient final : public nx::gfx::native_device_client {
+class decode_client final : public nx::gfx::native_device_client {
 public:
   void device_extensions(const nx::gfx::native_device &adapter,
                          nx::gfx::native_names &out) override;
@@ -24,6 +24,6 @@ private:
 
 /// The client a device that should decode video is made with; the video
 /// module offers it, and Device::native_queue answers for it.
-[[nodiscard]] VideoDecodeClient &video_decode_client() noexcept;
+[[nodiscard]] decode_client &video_decode_client() noexcept;
 
-} // namespace nxm::video
+} // namespace nx::gfx::video
