@@ -24,7 +24,7 @@ namespace {
 
 struct HwVideoSource::Impl {
   nx::gfx::video::video_decoder decoder;
-  WebmVideoDemux demux;
+  std::unique_ptr<WebmVideoDemux> demux;
   nx::vector<u8> next_bytes;
   f64 next_pts = 0.0;
   f64 next_due = 0.0;
@@ -40,7 +40,7 @@ struct HwVideoSource::Impl {
   bool demux_next() {
     const u8 *data = nullptr;
     long len = 0;
-    if (!demux.next(data, len, next_pts))
+    if (!demux->next(data, len, next_pts))
       return false;
     if (data == nullptr || len <= 0 || !std::isfinite(next_pts) ||
         next_pts < 0.0 ||
@@ -62,7 +62,7 @@ struct HwVideoSource::Impl {
       return;
     }
     if (looping) {
-      const f64 frame_time = 1.0 / nx::max(demux.frame_rate(), 1.0);
+      const f64 frame_time = 1.0 / nx::max(demux->frame_rate(), 1.0);
       const f64 cycle = loop_duration > last_local_pts
                             ? loop_duration
                             : last_local_pts + frame_time;
@@ -72,7 +72,7 @@ struct HwVideoSource::Impl {
         return;
       }
       timeline_offset += cycle;
-      demux.restart();
+      demux->restart();
       if (demux_next()) {
         have_next = true;
         return;
@@ -89,18 +89,19 @@ bool hw_decode_available(gfx::device &device) {
 HwVideoSource::HwVideoSource() : m(std::make_unique<Impl>()) {}
 HwVideoSource::~HwVideoSource() = default;
 
-bool HwVideoSource::open(gfx::device &device, const nx::string_view path) {
-  if (!m->demux.open(path, "V_VP9")) {
-    nx::logw("video: hw demux failed for '{}'", path);
+bool HwVideoSource::open(gfx::device &device,
+                         std::unique_ptr<WebmVideoDemux> demux) {
+  if (demux == nullptr)
     return false;
-  }
+  m->demux = std::move(demux);
   if (!m->decoder.init(device, nx::gfx::video::video_codec::VP9,
-                       m->demux.width(), m->demux.height())) {
-    nx::logw("video: hw decoder init failed for '{}'", path);
+                       m->demux->width(), m->demux->height())) {
+    nx::logw("video: hw decoder init failed for a {}x{} clip",
+             m->demux->width(), m->demux->height());
     return false;
   }
   m->timeline_offset = 0.0;
-  m->loop_duration = m->demux.duration();
+  m->loop_duration = m->demux->duration();
   m->last_local_pts = 0.0;
   m->current_pts = -1.0;
   m->finished = false;
@@ -110,9 +111,15 @@ bool HwVideoSource::open(gfx::device &device, const nx::string_view path) {
 }
 
 bool HwVideoSource::valid() const noexcept { return m->valid; }
-u32 HwVideoSource::width() const noexcept { return m->demux.width(); }
-u32 HwVideoSource::height() const noexcept { return m->demux.height(); }
-f64 HwVideoSource::frame_rate() const noexcept { return m->demux.frame_rate(); }
+u32 HwVideoSource::width() const noexcept {
+  return m->demux != nullptr ? m->demux->width() : 0;
+}
+u32 HwVideoSource::height() const noexcept {
+  return m->demux != nullptr ? m->demux->height() : 0;
+}
+f64 HwVideoSource::frame_rate() const noexcept {
+  return m->demux != nullptr ? m->demux->frame_rate() : 0.0;
+}
 f64 HwVideoSource::position() const noexcept { return m->current_pts; }
 bool HwVideoSource::finished() const noexcept { return m->finished; }
 
@@ -123,7 +130,7 @@ bool HwVideoSource::seek(const f64 target_seconds, const bool looping) {
   const f64 local = looping && m->loop_duration > 0.0
                         ? std::fmod(target, m->loop_duration)
                         : target;
-  if (!m->valid || !m->demux.seek(local))
+  if (!m->valid || !m->demux->seek(local))
     return false;
   m->decoder.reset_stream();
   m->timeline_offset = looping ? target - local : 0.0;
@@ -172,7 +179,7 @@ GpuFrame HwVideoSource::frame_at(const f64 target_seconds, const bool looping) {
   if (advanced && m->decoder.show_last()) {
     m->frame.luma = m->decoder.luma_texture();
     m->frame.chroma = m->decoder.chroma_texture();
-    m->frame.colour = m->demux.colour();
+    m->frame.colour = m->demux->colour();
     const gfx::extent2d coded = m->decoder.coded_extent();
     m->frame.uv_scale = {
         coded.width != 0 ? nx::cast<f32>(shown_w) / coded.width : 1.f,
@@ -188,7 +195,9 @@ bool hw_decode_available(gfx::device &) { return false; }
 struct HwVideoSource::Impl {};
 HwVideoSource::HwVideoSource() = default;
 HwVideoSource::~HwVideoSource() = default;
-bool HwVideoSource::open(gfx::device &, nx::string_view) { return false; }
+bool HwVideoSource::open(gfx::device &, std::unique_ptr<WebmVideoDemux>) {
+  return false;
+}
 bool HwVideoSource::valid() const noexcept { return false; }
 u32 HwVideoSource::width() const noexcept { return 0; }
 u32 HwVideoSource::height() const noexcept { return 0; }

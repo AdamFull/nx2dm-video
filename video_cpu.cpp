@@ -1,6 +1,7 @@
 #include "video/video_gpu.h"
 
 #include "video/video_decode.h"
+#include "video/video_demux.h"
 #include "video/video_hw.h"
 #include "video/video_mediacodec.h"
 
@@ -23,18 +24,8 @@ class CpuVideoSource final : public GpuVideoSource {
 public:
   ~CpuVideoSource() override { destroy_textures(); }
 
-  [[nodiscard]] bool open(gfx::device &device,
-                          const nx::string_view path) override {
+  [[nodiscard]] bool open(gfx::device &device, SourcePtr source) {
     m_device = &device;
-    SourcePtr source;
-    if (path.empty()) {
-      source = std::make_unique<SyntheticSource>(SYNTH_WIDTH, SYNTH_HEIGHT,
-                                                 SYNTH_FPS);
-    } else {
-      source = open_media_codec(path);
-      if (!source)
-        source = open_webm(path);
-    }
     if (!source)
       return false;
     m_width = source->width();
@@ -185,17 +176,42 @@ private:
 
 } // namespace
 
-GpuSourcePtr create_video_source(gfx::device &device,
-                                 const nx::string_view path) {
-  // The hardware block where it can take the clip (VP9 only, for now), the CPU
-  // decoder otherwise. A hardware open that fails still falls through to CPU.
-  if (hw_decode_available(device) && webm_is_vp9(path)) {
+OpenedVideo::OpenedVideo() noexcept = default;
+OpenedVideo::~OpenedVideo() = default;
+OpenedVideo::OpenedVideo(OpenedVideo &&) noexcept = default;
+OpenedVideo &OpenedVideo::operator=(OpenedVideo &&) noexcept = default;
+
+OpenedVideo open_video(const nx::string_view path, const bool hardware) {
+  OpenedVideo out;
+  if (path.empty()) {
+    out.cpu =
+        std::make_unique<SyntheticSource>(SYNTH_WIDTH, SYNTH_HEIGHT, SYNTH_FPS);
+    return out;
+  }
+  // The hardware block where it can take the clip (VP9 only, for now), the
+  // CPU decoder otherwise.
+  if (hardware) {
+    auto demux = std::make_unique<WebmVideoDemux>();
+    if (demux->open(path, "V_VP9")) {
+      out.vp9 = std::move(demux);
+      return out;
+    }
+  }
+  out.cpu = open_media_codec(path);
+  if (!out.cpu)
+    out.cpu = open_webm(path);
+  return out;
+}
+
+GpuSourcePtr create_video_source(gfx::device &device, OpenedVideo opened) {
+  if (opened.vp9 != nullptr) {
     auto hw = std::make_unique<HwVideoSource>();
-    if (hw->open(device, path))
+    if (hw->open(device, std::move(opened.vp9)))
       return hw;
+    return nullptr;
   }
   auto cpu = std::make_unique<CpuVideoSource>();
-  if (cpu->open(device, path))
+  if (cpu->open(device, std::move(opened.cpu)))
     return cpu;
   return nullptr;
 }

@@ -15,8 +15,9 @@ public:
   HwVideoSource(const HwVideoSource &) = delete;
   HwVideoSource &operator=(const HwVideoSource &) = delete;
 
+  /// Makes the hardware decoder for @p demux, a clip's opened VP9 track.
   [[nodiscard]] bool open(nx::gfx::device &device,
-                          nx::string_view path) override;
+                          std::unique_ptr<WebmVideoDemux> demux);
   [[nodiscard]] bool valid() const noexcept override;
   [[nodiscard]] u32 width() const noexcept override;
   [[nodiscard]] u32 height() const noexcept override;

@@ -1,6 +1,7 @@
 
 #include "framework/nxtest.h"
 
+#include "video/video_demux.h"
 #include "video/video_hw.h"
 
 #include "nx/gfx/gfx.h"
@@ -611,7 +612,8 @@ TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
   REQUIRE(!frames.empty());
 
   nxm::video::HwVideoSource src;
-  REQUIRE(src.open(fixture.device, "/test.webm"));
+  REQUIRE(
+      src.open(fixture.device, nxm::video::open_video("/test.webm", true).vp9));
   CHECK(src.width() == 320u);
   CHECK(src.height() == 240u);
   CHECK(src.frame_rate() > 0.0);
@@ -662,13 +664,15 @@ TEST_CASE("hw source: a webm clip decodes and paces on the hardware path") {
   CHECK(src.position() >= 3.0);
 
   nxm::video::HwVideoSource resumed;
-  REQUIRE(resumed.open(fixture.device, "/test.webm"));
+  REQUIRE(resumed.open(fixture.device,
+                       nxm::video::open_video("/test.webm", true).vp9));
   REQUIRE(resumed.seek(1.0, false));
   REQUIRE(resumed.frame_at(1.0, false).valid());
   CHECK(resumed.position() > 0.8);
 
   nxm::video::HwVideoSource looped;
-  REQUIRE(looped.open(fixture.device, "/test.webm"));
+  REQUIRE(looped.open(fixture.device,
+                      nxm::video::open_video("/test.webm", true).vp9));
   REQUIRE(looped.frame_at(3.1, true).valid());
   CHECK(looped.position() >= 3.0);
   CHECK(looped.position() < 3.2);
@@ -687,8 +691,8 @@ TEST_CASE("gpu source: the factory drives the CPU backend behind one interface")
   REQUIRE(nx::vfs::mount("/", nx::vfs::make_host_device(NX_VIDEO_FIXTURE_DIR), 0)
               .valid());
 
-  const nxm::video::GpuSourcePtr src =
-      nxm::video::create_video_source(fixture.device, "/test_av1.webm");
+  const nxm::video::GpuSourcePtr src = nxm::video::create_video_source(
+      fixture.device, nxm::video::open_video("/test_av1.webm", true));
   REQUIRE(src != nullptr);
   CHECK(src->width() == 320u);
   CHECK(src->height() == 240u);

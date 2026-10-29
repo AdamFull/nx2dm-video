@@ -5,6 +5,7 @@
 #include "video/video_clip.h"
 #include "video/video_decode.h"
 #include "video/video_demux.h"
+#include "video/video_gpu.h"
 #include "video/video_mediacodec.h"
 #include "video/video_source.h"
 
@@ -189,6 +190,37 @@ TEST_CASE("video decode: the codec peek tells VP9 from AV1 (hw path gate)") {
   CHECK(nxm::video::webm_is_vp9("/test.webm"));
   CHECK_FALSE(nxm::video::webm_is_vp9("/test_av1.webm"));
   CHECK_FALSE(nxm::video::webm_is_vp9("/nope.webm"));
+}
+
+TEST_CASE("video open: a clip opens with no device, its VP9 track for the "
+          "hardware decoder and anything else for the CPU") {
+  const MountedFixtures fixtures;
+  REQUIRE(fixtures.ok);
+
+  nxm::video::OpenedVideo vp9 = nxm::video::open_video("/test.webm", true);
+  REQUIRE(vp9.vp9 != nullptr);
+  CHECK(vp9.cpu == nullptr);
+  CHECK(vp9.vp9->width() == 320u);
+  CHECK(vp9.vp9->height() == 240u);
+
+  const nxm::video::OpenedVideo cpu =
+      nxm::video::open_video("/test.webm", false);
+  CHECK(cpu.vp9 == nullptr);
+  REQUIRE(cpu.cpu != nullptr);
+  CHECK(cpu.cpu->width() == 320u);
+
+  const nxm::video::OpenedVideo av1 =
+      nxm::video::open_video("/test_av1.webm", true);
+  CHECK(av1.vp9 == nullptr);
+  CHECK(av1.cpu != nullptr);
+
+  const nxm::video::OpenedVideo missing =
+      nxm::video::open_video("/nope.webm", true);
+  CHECK(missing.vp9 == nullptr);
+  CHECK(missing.cpu == nullptr);
+
+  const nxm::video::OpenedVideo synthetic = nxm::video::open_video("", true);
+  CHECK(synthetic.cpu != nullptr);
 }
 
 TEST_CASE("video decode: an AV1 webm decodes through the same FrameSource") {

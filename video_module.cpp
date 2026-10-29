@@ -24,6 +24,8 @@
 #include "core/foundation/core/foundation.h"
 #include "core/foundation/core/hash.h"
 #include "core/foundation/diagnostics/log.h"
+#include "core/foundation/threading/thread_pool.h"
+#include "core/foundation/vfs/async_io.h"
 #include "core/foundation/vfs/vfs.h"
 
 #include <atomic>
@@ -138,6 +140,8 @@ struct DyingStream {
 struct Source {
   nxe::scene::Entity owner{};
   GpuSourcePtr source;
+  /// The clip being read and demuxed off the render job.
+  nx::future<OpenedVideo> opening;
   nx::string clip;
   u64 generation = 0;
   bool opened = false;
@@ -476,6 +480,7 @@ private:
       Source &clip = source_for(item.owner);
       if (clip.clip != item.clip || clip.generation != item.generation) {
         clip.source.reset();
+        clip.opening = {};
         clip.clip = item.clip;
         clip.generation = item.generation;
         clip.opened = false;
@@ -483,7 +488,21 @@ private:
       }
       if (!clip.opened) {
         clip.opened = true;
-        clip.source = create_video_source(device, item.clip);
+        start_open(ctx, clip, hw_decode_available(device));
+      }
+      if (clip.opening.valid()) {
+        if (!clip.opening.ready())
+          continue;
+        OpenedVideo opened =
+            clip.opening.failed() ? OpenedVideo{} : clip.opening.get();
+        clip.opening = {};
+        const bool hardware = opened.vp9 != nullptr;
+        clip.source = create_video_source(device, std::move(opened));
+        if (clip.source == nullptr && hardware) {
+          // The hardware decoder would not take it: the CPU one may.
+          start_open(ctx, clip, false);
+          continue;
+        }
         clip.failed = clip.source == nullptr;
         if (clip.source != nullptr && item.pts > 0.0)
           (void)clip.source->seek(item.pts, item.looping);
@@ -523,6 +542,25 @@ private:
         });
     m_renderer.draw(device, graph, target, ctx.loaded_pipeline(request),
                     std::span<const VideoDraw>(draws.data(), draws.size()));
+  }
+
+  /// Reads and demuxes @p clip's file on the I/O service's blocking threads,
+  /// which also suit a platform media API, leaving the GPU half to record.
+  static void start_open(nxe::ModuleContext &ctx, Source &clip,
+                         const bool hardware) {
+    nx::vfs::AsyncIoService *const io = ctx.async_io();
+    if (io == nullptr) {
+      clip.opening = ctx.threads().async(
+          nx::task_priority::Normal, [path = clip.clip, hardware] {
+            return open_video(path.view(), hardware);
+          });
+      return;
+    }
+    clip.opening =
+        io->async({.priority = nx::task_priority::Normal},
+                  [path = clip.clip, hardware](nx::vfs::AsyncIoContext &) {
+                    return open_video(path.view(), hardware);
+                  });
   }
 
   [[nodiscard]] Decoder &decoder_for(const nxe::scene::Entity entity) {
