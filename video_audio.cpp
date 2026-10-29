@@ -776,4 +776,20 @@ nxe::audio::DecoderPtr open_webm_audio(const nx::string_view path) {
   return open_webm_vorbis(path);
 }
 
+nx::unique_ptr<nxe::audio::AudioStream>
+open_video_audio(const nx::string_view path, const bool looping,
+                 const f64 start_seconds) {
+  nxe::audio::DecoderPtr codec = open_webm_audio(path);
+  if (!codec)
+    return nullptr;
+  if (start_seconds > 0.0 && codec->format().sample_rate != 0)
+    (void)codec->seek(
+        nx::cast<u64>(start_seconds * codec->format().sample_rate));
+  auto stream = nx::make_unique<nxe::audio::AudioStream>();
+  if (!stream->open(std::move(codec), 1.f, looping))
+    return nullptr;
+  stream->pump();
+  return stream;
+}
+
 } // namespace nxm::video

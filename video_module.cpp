@@ -114,6 +114,9 @@ struct Active {
 struct Decoder {
   nxe::scene::Entity owner{};
   nx::unique_ptr<nxe::audio::AudioStream> audio;
+  /// The audio track being opened and primed off the frame; the clock holds
+  /// until it plays, so picture and sound start together.
+  nx::future<nx::unique_ptr<nxe::audio::AudioStream>> audio_opening;
   nxe::audio::VoiceHandle voice;
   u64 last_dsp = 0;
   bool audio_started = false;
@@ -324,6 +327,7 @@ private:
         if (m_audio_enabled)
           start_audio(ctx, decoder);
       } else if (player.clip != decoder.player_clip) {
+        decoder.audio_opening = {};
         if (decoder.audio_started) {
           if (ctx.mixer().valid())
             ctx.mixer().stop(decoder.voice);
@@ -366,7 +370,7 @@ private:
                 dependency_stamp(player.clip.view(), decoder.source.view());
             decoder.finished->store(false, std::memory_order_relaxed);
             ++decoder.generation;
-            if (decoder.audio_started)
+            if (has_audio(decoder))
               reseat_audio(ctx, decoder, decoder.clock);
             else if (m_audio_enabled)
               start_audio(ctx, decoder, decoder.clock);
@@ -380,17 +384,18 @@ private:
         decoder.player_looping = player.looping;
         decoder.loop = player.looping;
         decoder.finished->store(false, std::memory_order_relaxed);
-        if (decoder.audio_started)
+        if (has_audio(decoder))
           reseat_audio(ctx, decoder, decoder.clock);
       }
 
       if (player.seek_to >= 0.0) {
         decoder.clock = player.seek_to;
-        if (decoder.audio_started)
+        if (has_audio(decoder))
           reseat_audio(ctx, decoder, player.seek_to);
         player.seek_to = -1.0;
       }
 
+      take_audio(ctx, decoder);
       if (player.paused) {
         if (decoder.audio_started && !decoder.paused) {
           if (ctx.mixer().valid())
@@ -439,6 +444,8 @@ private:
 
   [[nodiscard]] f64 advance_clock(nxe::ModuleContext &ctx, Decoder &decoder,
                                   const f64 dt) {
+    if (decoder.audio_opening.valid())
+      return 0.0;
     if (!decoder.audio_started || !ctx.mixer().valid())
       return dt;
     decoder.audio->pump();
@@ -497,7 +504,8 @@ private:
             clip.opening.failed() ? OpenedVideo{} : clip.opening.get();
         clip.opening = {};
         const bool hardware = opened.vp9 != nullptr;
-        clip.source = create_video_source(device, std::move(opened));
+        clip.source =
+            create_video_source(device, std::move(opened), &ctx.threads());
         if (clip.source == nullptr && hardware) {
           // The hardware decoder would not take it: the CPU one may.
           start_open(ctx, clip, false);
@@ -598,18 +606,35 @@ private:
 
   void start_audio(nxe::ModuleContext &ctx, Decoder &decoder,
                    const f64 start_seconds = 0.0) {
+    decoder.audio_opening = {};
     if (decoder.source.empty() || !ctx.config().audio || !ctx.mixer().valid())
       return;
-    nxe::audio::DecoderPtr codec = open_webm_audio(decoder.source);
-    if (!codec)
+    // Reading the file and decoding its first second waits on storage and
+    // costs a frame's worth of CPU; the I/O service's blocking threads take it.
+    auto open = [path = decoder.source, loop = decoder.loop, start_seconds] {
+      return open_video_audio(path.view(), loop, start_seconds);
+    };
+    nx::vfs::AsyncIoService *const io = ctx.async_io();
+    decoder.audio_opening =
+        io != nullptr
+            ? io->async({.priority = nx::task_priority::Normal},
+                        [open](nx::vfs::AsyncIoContext &) { return open(); })
+            : ctx.threads().async(nx::task_priority::Normal, open);
+  }
+
+  [[nodiscard]] static bool has_audio(const Decoder &decoder) noexcept {
+    return decoder.audio_started || decoder.audio_opening.valid();
+  }
+
+  /// Plays the audio track once its open is done.
+  void take_audio(nxe::ModuleContext &ctx, Decoder &decoder) {
+    if (!decoder.audio_opening.valid() || !decoder.audio_opening.ready())
       return;
-    if (start_seconds > 0.0 && codec->format().sample_rate != 0)
-      (void)codec->seek(
-          nx::cast<u64>(start_seconds * codec->format().sample_rate));
-    auto stream = nx::make_unique<nxe::audio::AudioStream>();
-    if (!stream->open(std::move(codec), 1.f, decoder.loop))
+    nx::unique_ptr<nxe::audio::AudioStream> stream =
+        decoder.audio_opening.failed() ? nullptr : decoder.audio_opening.get();
+    decoder.audio_opening = {};
+    if (stream == nullptr || !ctx.mixer().valid())
       return;
-    stream->pump();
     const nxe::audio::VoiceHandle voice = ctx.mixer().play(*stream, {});
     if (!voice.valid())
       return;

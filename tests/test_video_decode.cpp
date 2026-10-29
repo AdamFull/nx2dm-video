@@ -651,6 +651,34 @@ TEST_CASE("video audio: a Vorbis track decodes to PCM, and has sound") {
   CHECK(nxm::video::open_webm_vorbis("/nope.webm") == nullptr);
 }
 
+TEST_CASE("video audio: a clip's audio opens primed from a time, with no "
+          "mixer") {
+  const MountedFixtures fixtures;
+  REQUIRE(fixtures.ok);
+
+  const nx::unique_ptr<nxe::audio::AudioStream> stream =
+      nxm::video::open_video_audio("/test_audio.webm", false, 0.5);
+  REQUIRE(stream != nullptr);
+  CHECK(stream->valid());
+  CHECK_FALSE(stream->looping());
+  REQUIRE(stream->buffered() > 0u);
+
+  // It begins where a decoder seeked to the same time does.
+  nxe::audio::DecoderPtr codec =
+      nxm::video::open_webm_audio("/test_audio.webm");
+  REQUIRE(codec != nullptr);
+  REQUIRE(codec->seek(nx::cast<u64>(0.5 * codec->format().sample_rate)));
+  const u32 channels = codec->format().channels;
+  std::vector<i16> expected(nx::cast<usize>(256u) * channels);
+  std::vector<i16> got(expected.size());
+  REQUIRE(codec->read(expected.data(), 256) == 256u);
+  REQUIRE(stream->read(got.data(), 256) == 256u);
+  CHECK(expected == got);
+
+  CHECK(nxm::video::open_video_audio("/test.webm", true, 0.0) == nullptr);
+  CHECK(nxm::video::open_video_audio("/nope.webm", true, 0.0) == nullptr);
+}
+
 TEST_CASE("video audio: an audio track seeks to a time, and home again") {
   const MountedFixtures fixtures;
   REQUIRE(fixtures.ok);

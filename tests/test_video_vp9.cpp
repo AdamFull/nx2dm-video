@@ -11,6 +11,7 @@
 
 #include "core/foundation/diagnostics/log.h"
 #include "core/foundation/threading/thread.h"
+#include "core/foundation/threading/thread_pool.h"
 #include "core/foundation/vfs/vfs.h"
 
 #include "mkvparser/mkvparser.h"
@@ -21,6 +22,7 @@
 #include "vpx/vpx_image.h"
 
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -723,6 +725,51 @@ TEST_CASE("gpu source: the factory drives the CPU backend behind one interface")
   CHECK(src->position() < 0.2);
   for (int i = 0; i < 200; ++i)
     (void)src->frame_at(100.0, false);
+  CHECK(src->finished());
+}
+
+TEST_CASE("gpu source: a CPU clip decodes on the workers and shows each "
+          "frame a call later") {
+  TestDevice fixture;
+  if (!fixture.ready)
+    SKIP("no usable RHI device");
+
+  REQUIRE(nx::vfs::initialize());
+  struct Unmount {
+    ~Unmount() { nx::vfs::unmount_all(); }
+  } unmount;
+  REQUIRE(
+      nx::vfs::mount("/", nx::vfs::make_host_device(NX_VIDEO_FIXTURE_DIR), 0)
+          .valid());
+  nx::thread_pool workers({.thread_count = 2});
+
+  const nxm::video::GpuSourcePtr src = nxm::video::create_video_source(
+      fixture.device, nxm::video::open_video("/test_av1.webm", true), &workers);
+  REQUIRE(src != nullptr);
+  // The first call only starts the decode it will show.
+  CHECK_FALSE(src->frame_at(0.0, false).valid());
+
+  const auto reach = [&](const f64 target, const bool looping) {
+    nxm::video::GpuFrame frame;
+    for (u32 call = 0; call < 2000; ++call) {
+      frame = src->frame_at(target, looping);
+      if (frame.valid() && std::abs(src->position() - target) < 0.2)
+        break;
+      nx::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return frame;
+  };
+  REQUIRE(reach(1.0, false).valid());
+  CHECK(src->position() > 0.8);
+  CHECK(src->position() < 1.2);
+  CHECK_FALSE(src->finished());
+
+  REQUIRE(src->seek(0.5, false));
+  REQUIRE(reach(0.5, false).valid());
+  CHECK(src->position() > 0.3);
+  CHECK(src->position() < 0.7);
+
+  (void)reach(100.0, false);
   CHECK(src->finished());
 }
 

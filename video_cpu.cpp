@@ -7,6 +7,8 @@
 
 #include "nx/gfx/gfx.h"
 
+#include "core/foundation/threading/thread_pool.h"
+
 #include <cmath>
 #include <memory>
 #include <span>
@@ -24,19 +26,22 @@ class CpuVideoSource final : public GpuVideoSource {
 public:
   ~CpuVideoSource() override { destroy_textures(); }
 
-  [[nodiscard]] bool open(gfx::device &device, SourcePtr source) {
+  [[nodiscard]] bool open(gfx::device &device, SourcePtr source,
+                          nx::thread_pool *const workers) {
     m_device = &device;
+    m_workers = workers;
     if (!source)
       return false;
     m_width = source->width();
     m_height = source->height();
     m_fps = source->frame_rate();
-    m_playback.reset(std::move(source), true);
+    m_playback = nx::make_shared<PacedPlayback>();
+    m_playback->reset(std::move(source), true);
     return true;
   }
 
   [[nodiscard]] bool valid() const noexcept override {
-    return m_playback.valid();
+    return m_playback != nullptr && m_playback->valid();
   }
   [[nodiscard]] u32 width() const noexcept override { return m_width; }
   [[nodiscard]] u32 height() const noexcept override { return m_height; }
@@ -46,10 +51,15 @@ public:
     if (!std::isfinite(target_seconds))
       return false;
     const f64 target = nx::max(target_seconds, 0.0);
-    const f64 duration = m_playback.duration();
+    // A decode in flight is still moving the playback.
+    if (m_decoding.valid()) {
+      m_decoding.wait();
+      m_decoding = {};
+    }
+    const f64 duration = m_playback->duration();
     const f64 local =
         looping && duration > 0.0 ? std::fmod(target, duration) : target;
-    if (!m_playback.seek(local, target))
+    if (!m_playback->seek(local, target))
       return false;
     m_finished = false;
     return true;
@@ -61,11 +71,36 @@ public:
                                   const bool looping) override {
     if (!std::isfinite(target_seconds))
       return m_frame;
-    m_playback.set_looping(looping);
-    const VideoFrame *const frame = m_playback.advance_to(target_seconds);
-    m_finished = m_playback.finished();
-    if (frame == nullptr)
+    if (m_workers == nullptr) {
+      m_playback->set_looping(looping);
+      show(m_playback->advance_to(target_seconds));
       return m_frame;
+    }
+    // Uploads what the last call's decode made and starts the next on a
+    // worker: the picture is a frame behind its target, and the render job
+    // never decodes.
+    if (m_decoding.valid()) {
+      if (!m_decoding.ready())
+        return m_frame;
+      const VideoFrame *const decoded =
+          m_decoding.failed() ? nullptr : m_decoding.get();
+      m_decoding = {};
+      show(decoded);
+    }
+    m_playback->set_looping(looping);
+    m_decoding = m_workers->async(
+        nx::task_priority::Normal,
+        [playback = m_playback, target_seconds]() -> const VideoFrame * {
+          return playback->advance_to(target_seconds);
+        });
+    return m_frame;
+  }
+
+private:
+  void show(const VideoFrame *const frame) {
+    m_finished = m_playback->finished();
+    if (frame == nullptr)
+      return;
     if (frame->pts != m_uploaded_pts || !m_frame.valid()) {
       if (upload(*frame)) {
         m_uploaded_pts = frame->pts;
@@ -76,10 +111,8 @@ public:
         m_frame.colour = frame->colour;
       }
     }
-    return m_frame;
   }
 
-private:
   [[nodiscard]] bool upload(const VideoFrame &frame) {
     if (!ensure_textures(frame))
       return false;
@@ -159,7 +192,11 @@ private:
   }
 
   gfx::device *m_device = nullptr;
-  PacedPlayback m_playback;
+  nx::thread_pool *m_workers = nullptr;
+  /// Shared with a decode in flight, which outlives the source when it is
+  /// dropped mid-decode.
+  nx::shared_ptr<PacedPlayback> m_playback;
+  nx::future<const VideoFrame *> m_decoding;
   gfx::texture_handle m_luma;
   gfx::texture_handle m_chroma;
   nx::vector<u8> m_chroma_scratch;
@@ -203,7 +240,8 @@ OpenedVideo open_video(const nx::string_view path, const bool hardware) {
   return out;
 }
 
-GpuSourcePtr create_video_source(gfx::device &device, OpenedVideo opened) {
+GpuSourcePtr create_video_source(gfx::device &device, OpenedVideo opened,
+                                 nx::thread_pool *const workers) {
   if (opened.vp9 != nullptr) {
     auto hw = std::make_unique<HwVideoSource>();
     if (hw->open(device, std::move(opened.vp9)))
@@ -211,7 +249,7 @@ GpuSourcePtr create_video_source(gfx::device &device, OpenedVideo opened) {
     return nullptr;
   }
   auto cpu = std::make_unique<CpuVideoSource>();
-  if (cpu->open(device, std::move(opened.cpu)))
+  if (cpu->open(device, std::move(opened.cpu), workers))
     return cpu;
   return nullptr;
 }

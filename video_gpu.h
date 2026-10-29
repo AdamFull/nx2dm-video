@@ -9,6 +9,10 @@
 #include <glm/vec2.hpp>
 #include <memory>
 
+namespace nx {
+class thread_pool;
+}
+
 namespace nxm::video {
 
 class WebmVideoDemux;
@@ -63,7 +67,9 @@ struct OpenedVideo {
 [[nodiscard]] OpenedVideo open_video(nx::string_view path, bool hardware);
 
 /// The GPU half of opening a clip, on the render job. Null when @p opened is
-/// empty, or the hardware decoder would not take its VP9 track.
-[[nodiscard]] GpuSourcePtr create_video_source(nx::gfx::device &device,
-                                               OpenedVideo opened);
+/// empty, or the hardware decoder would not take its VP9 track. A CPU-decoded
+/// clip decodes on @p workers, a frame behind, when there are any.
+[[nodiscard]] GpuSourcePtr
+create_video_source(nx::gfx::device &device, OpenedVideo opened,
+                    nx::thread_pool *workers = nullptr);
 }
