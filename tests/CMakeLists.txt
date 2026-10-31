@@ -20,7 +20,7 @@ target_include_directories(nx_video_tests PRIVATE
         "${NX_ENGINE_ROOT}/engine" "${NX_ENGINE_ROOT}/modules")
 
 target_link_libraries(nx_video_tests
-        PRIVATE nx::test nx::foundation nx::audio nx::gfx nx::gfx_video nx::glm nx::vpx nx::webm nx::opus
+        PRIVATE nx::test nx::foundation nx::audio nx::gfx nx::gfx_video nx::vpx nx::webm nx::opus
         nx::vorbis nx::gav1 nx::compile_options)
 
 if (ANDROID)
@@ -65,7 +65,7 @@ add_executable(nx_video_scripting_tests
 target_include_directories(nx_video_scripting_tests PRIVATE
         "${NX_ENGINE_ROOT}/engine" "${NX_ENGINE_ROOT}/modules")
 target_link_libraries(nx_video_scripting_tests
-        PRIVATE nx::test nx::foundation nx::engine nx::glm nx::compile_options)
+        PRIVATE nx::test nx::foundation nx::engine nx::compile_options)
 set_target_properties(nx_video_scripting_tests PROPERTIES FOLDER "tests")
 nxtest_discover_tests(nx_video_scripting_tests LABELS video)
 
