@@ -8,8 +8,7 @@
 #include "nx/gfx/shaders/texture.hpp"
 #include "rendering/graph/render_graph.h"
 
-#include <glm/vec2.hpp>
-#include <glm/vec4.hpp>
+#include "core/foundation/math/names.h"
 #include <span>
 
 namespace nxm::video {
@@ -18,15 +17,15 @@ static_assert(sizeof(GpuVideoPush) <= nx::gfx::PUSH_CONSTANT_SIZE,
               "the video push block must fit the guaranteed push range");
 
 struct VideoDraw {
-  glm::vec4 rect{-1.f, -1.f, 1.f, 1.f};
-  glm::vec2 uv_scale{1.f, 1.f};
+  float4 rect{-1.f, -1.f, 1.f, 1.f};
+  float2 uv_scale{1.f, 1.f};
   nx::gfx::texture_handle luma;
   nx::gfx::texture_handle chroma;
   u32 sampler_index = 0;
   ColourInfo colour;
 };
 
-[[nodiscard]] inline glm::vec2 luma_coeffs(const ColourMatrix matrix) noexcept {
+[[nodiscard]] inline float2 luma_coeffs(const ColourMatrix matrix) noexcept {
   switch (matrix) {
   case ColourMatrix::BT601:
     return {0.299f, 0.114f};

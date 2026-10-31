@@ -6,7 +6,7 @@
 
 #include "core/foundation/strings/utf8_string_view.h"
 
-#include <glm/vec2.hpp>
+#include "core/foundation/math/names.h"
 #include <memory>
 
 namespace nx {
@@ -20,7 +20,7 @@ class WebmVideoDemux;
 struct GpuFrame {
   nx::gfx::texture_handle luma;
   nx::gfx::texture_handle chroma;
-  glm::vec2 uv_scale{1.f, 1.f};
+  float2 uv_scale{1.f, 1.f};
   ColourInfo colour;
   [[nodiscard]] bool valid() const noexcept {
     return luma.valid() && chroma.valid();

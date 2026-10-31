@@ -2,7 +2,7 @@
 
 #include "scene/components.h"
 
-#include <glm/vec4.hpp>
+#include "core/foundation/math/names.h"
 
 namespace nxm::video {
 
@@ -12,7 +12,7 @@ struct VideoPlayer {
   bool looping = true;
   bool fullscreen = true;
   bool world_space = false;
-  glm::vec4 rect{-1.f, -1.f, 1.f, 1.f};
+  float4 rect{-1.f, -1.f, 1.f, 1.f};
   bool finished = false;
   bool paused = false;
   f64 seek_to = -1.0;

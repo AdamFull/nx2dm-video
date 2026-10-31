@@ -1,4 +1,5 @@
 
+#include "core/foundation/math/names.h"
 #include "video/video_audio.h"
 #include "video/video_clip.h"
 #include "video/video_component.h"
@@ -86,9 +87,9 @@ struct ResolvedClip {
 
 struct VideoItem {
   nxe::scene::Entity owner{};
-  glm::vec4 rect{-1.f, -1.f, 1.f, 1.f};
+  float4 rect{-1.f, -1.f, 1.f, 1.f};
   bool world_space = false;
-  glm::vec2 eye{0.f, 0.f};
+  float2 eye{0.f, 0.f};
   f32 half_h = 1.f;
   f64 pts = 0.0;
   bool looping = false;
@@ -287,7 +288,7 @@ private:
     for (nx::unique_ptr<Decoder> &d : m_decoders)
       d->touched = false;
 
-    glm::vec2 cam_eye{0.f, 0.f};
+    float2 cam_eye{0.f, 0.f};
     f32 cam_half_h = 1.f;
     if (const nxe::scene::Entity cam = ctx.scene().active_camera();
         cam.valid()) {
@@ -297,7 +298,7 @@ private:
         cam_half_h = c->ortho_height * 0.5f / zoom;
       }
       if (const auto *const w = reg.try_get<nxe::scene::WorldTransform2D>(cam))
-        cam_eye = glm::vec2(w->world.columns[2][0], w->world.columns[2][1]);
+        cam_eye = float2(w->world.columns[2][0], w->world.columns[2][1]);
     }
 
     nx::small_vector<Active, 8> active;
@@ -427,7 +428,7 @@ private:
         item.half_h = cam_half_h;
       } else {
         item.rect =
-            player.fullscreen ? glm::vec4{-1.f, -1.f, 1.f, 1.f} : player.rect;
+            player.fullscreen ? float4{-1.f, -1.f, 1.f, 1.f} : player.rect;
       }
       item.pts = decoder.clock;
       item.clip = decoder.source;
@@ -479,7 +480,7 @@ private:
     nx::vector<VideoDraw> draws;
     draws.reserve(channel->items.size());
     for (const VideoItem &item : channel->items) {
-      const glm::vec4 rect =
+      const float4 rect =
           item.world_space
               ? world_box_to_ndc(item.rect, item.eye, item.half_h, aspect)
               : item.rect;
