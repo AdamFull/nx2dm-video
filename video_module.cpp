@@ -297,7 +297,7 @@ private:
         cam_half_h = c->ortho_height * 0.5f / zoom;
       }
       if (const auto *const w = reg.try_get<nxe::scene::WorldTransform2D>(cam))
-        cam_eye = glm::vec2(w->world[2][0], w->world[2][1]);
+        cam_eye = glm::vec2(w->world.columns[2][0], w->world.columns[2][1]);
     }
 
     nx::small_vector<Active, 8> active;
